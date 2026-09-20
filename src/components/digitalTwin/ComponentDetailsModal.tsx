@@ -99,7 +99,7 @@ export const ComponentDetailsModal: React.FC = () => {
   const details = componentDetailsMap[compName] || {
     pin: 'GPIO / Bus',
     interfaceType: 'Hardware Interface',
-    purpose: 'Hardware component integrated in smart medicine storage box.',
+    purpose: 'Hardware component integrated in Tesseract box.',
     firmwareFunction: state.currentFirmwareFunction || 'loop()',
     currentVal: 'ACTIVE',
     samplingRate: 'Continuous',

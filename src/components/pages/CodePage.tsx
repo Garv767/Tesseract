@@ -8,7 +8,7 @@ export const CodePage: React.FC = () => {
   const [activeCodeTab, setActiveCodeTab] = useState<'main' | 'config' | 'web'>('main');
 
   const mainCppCode = `/* ============================================================================
- * ESP32 SMART MEDICINE STORAGE SYSTEM - FIRMWARE IMPLEMENTATION
+ * ESP32 Tesseract SYSTEM - FIRMWARE IMPLEMENTATION
  * Dual-Core FreeRTOS Embedded C/C++ Architecture
  * ============================================================================ */
 
@@ -46,7 +46,7 @@ uint8_t complianceRate = 91;
 
 void setup() {
     Serial.begin(115200);
-    Serial.println("[ESP32] Initializing Smart Medicine Storage Firmware...");
+    Serial.println("[ESP32] Initializing Tesseract Firmware...");
 
     pinMode(DOOR_PIN, INPUT_PULLUP);
     pinMode(BUZZER_PIN, OUTPUT);

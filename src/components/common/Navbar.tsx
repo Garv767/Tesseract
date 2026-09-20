@@ -59,7 +59,7 @@ export const Navbar: React.FC<NavbarProps> = ({ activeTab, setActiveTab }) => {
         <div className="flex items-center space-x-3">
           <div className="flex items-center space-x-1.5 font-bold text-cyan-400">
             <Cpu className="w-4 h-4 animate-pulse" />
-            <span>ESP32 SMART MEDICINE STORAGE</span>
+            <span>ESP32 Tesseract</span>
             <span className="bg-cyan-950 text-cyan-400 border border-cyan-800 px-1.5 py-0.5 rounded text-[10px] uppercase font-mono">
               DIGITAL TWIN SIMULATION
             </span>

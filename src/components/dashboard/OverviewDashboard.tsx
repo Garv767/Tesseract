@@ -29,7 +29,7 @@ export const OverviewDashboard: React.FC = () => {
         <div>
           <h2 className="text-xl font-bold text-slate-100 flex items-center space-x-2">
             <Activity className="w-5 h-5 text-cyan-400" />
-            <span>SMART MEDICINE STORAGE OVERVIEW</span>
+            <span>Tesseract OVERVIEW</span>
           </h2>
           <p className="text-xs text-slate-400 mt-0.5">
             Real-time digital twin monitoring console for medication compliance and environmental conditions.

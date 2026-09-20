@@ -1,13 +1,7 @@
 import React, { useState } from 'react';
 import { useSimulation } from '../../context/SimulationContext';
 import { SettingsDrawer } from './SettingsDrawer';
-import {
-  Clock,
-  Settings,
-  GraduationCap,
-  Sparkles,
-  Battery
-} from 'lucide-react';
+import { Settings } from 'lucide-react';
 
 interface HeaderProps {
   activeTab?: string;
@@ -15,86 +9,81 @@ interface HeaderProps {
 }
 
 export const Header: React.FC<HeaderProps> = ({ activeTab = 'digitalTwin', onOpenSettings }) => {
-  const { state, toggleVivaMode, runCompleteDemo } = useSimulation();
+  const { state } = useSimulation();
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
 
-  const pageTitles: Record<string, string> = {
-    dashboard: 'DASHBOARD MONITORING CONSOLE',
-    'digital-twin': 'DIGITAL TWIN SCHEMATIC WORKSPACE',
-    medication: 'MEDICATION ADHERENCE STATE MACHINE',
-    analytics: 'ENVIRONMENTAL & ADHERENCE ANALYTICS',
-    events: 'SYSTEM OPERATIONAL LOG TIMELINE',
-    code: 'REFERENCE EMBEDDED C/C++ FIRMWARE IDE'
+  const pageInfo: Record<string, { title: string, subtitle: string }> = {
+    dashboard: { title: 'Dashboard', subtitle: 'System overview and quick metrics' },
+    'digital-twin': { title: 'Digital Twin', subtitle: 'Interactive circuit and system simulation' },
+    medication: { title: 'Medication', subtitle: 'Medication adherence state machine' },
+    analytics: { title: 'Analytics', subtitle: 'Environmental and adherence analytics' },
+    events: { title: 'Events', subtitle: 'Real-time system events and alerts' },
+    code: { title: 'Code', subtitle: 'Reference Embedded C/C++ firmware IDE' }
   };
+
+  const info = pageInfo[activeTab] || { title: 'Digital Twin', subtitle: 'System Simulation' };
+
+  // Format date/time
+  const dateStr = state.currentSimulationTime.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+  const timeStr = state.currentSimulationTime.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 
   return (
     <>
-      <header className="bg-[#0f0f0f] border-b border-[#222222] px-4 py-2 flex flex-wrap items-center justify-between text-xs sticky top-0 z-30 select-none">
-        {/* Left: Page Title */}
-        <div className="flex items-center space-x-3">
-          <h1 className="font-bold text-slate-100 uppercase tracking-wider font-mono text-sm">
-            {pageTitles[activeTab] || 'ESP32 DIGITAL TWIN'}
+      <header className="bg-[#080808] px-5 py-4 flex flex-wrap items-start justify-between text-xs sticky top-0 z-30 select-none border-b border-[#222222]">
+        {/* Left: Page Title & Subtitle */}
+        <div className="flex flex-col">
+          <h1 className="font-semibold text-slate-100 text-xl tracking-wide">
+            {info.title}
           </h1>
+          <p className="text-slate-400 text-sm mt-0.5 font-sans">
+            {info.subtitle}
+          </p>
         </div>
 
         {/* Right: Technical Indicators & System Strip */}
-        <div className="flex items-center space-x-3">
-          {/* Status Strip (Restrained Badges) */}
-          <div className="hidden lg:flex items-center space-x-2 text-[10px] font-mono border-r border-[#222222] pr-3 text-slate-400">
-            <span className="flex items-center space-x-1">
-              <span className="text-slate-500">ESP32</span>
-              <span className={`w-1.5 h-1.5 rounded-full ${state.failures.powerFailed ? 'bg-rose-500' : 'bg-emerald-400'}`} />
-            </span>
+        <div className="flex items-center space-x-6">
+          {/* Status Strip */}
+          {activeTab !== 'digital-twin' && (
+            <div className="hidden lg:flex items-center space-x-6 mr-4">
+              <div className="flex flex-col items-start">
+                <div className="flex items-center space-x-1.5">
+                  <span className={`w-2 h-2 rounded-full ${state.failures.powerFailed ? 'bg-rose-500' : 'bg-emerald-500'}`} />
+                  <span className="text-slate-200 font-medium">ESP32</span>
+                </div>
+                <span className="text-[10px] text-emerald-500 ml-3.5 tracking-wider font-semibold">ONLINE</span>
+              </div>
 
-            <span className="flex items-center space-x-1">
-              <span className="text-slate-500">Wi-Fi</span>
-              <span className={`w-1.5 h-1.5 rounded-full ${state.wifiConnected ? 'bg-emerald-400' : 'bg-rose-500'}`} />
-            </span>
+              <div className="flex flex-col items-start">
+                <div className="flex items-center space-x-1.5">
+                  <span className={`w-2 h-2 rounded-full ${state.wifiConnected ? 'bg-emerald-500' : 'bg-rose-500'}`} />
+                  <span className="text-slate-200 font-medium">Wi-Fi</span>
+                </div>
+                <span className="text-[10px] text-emerald-500 ml-3.5 tracking-wider font-semibold">CONNECTED</span>
+              </div>
 
-            <span className="flex items-center space-x-1">
-              <span className="text-slate-500">RTC</span>
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
-            </span>
+              <div className="flex flex-col items-start">
+                <div className="flex items-center space-x-1.5">
+                  <span className="w-2 h-2 rounded-full bg-emerald-500" />
+                  <span className="text-slate-200 font-medium">RTC</span>
+                </div>
+                <span className="text-[10px] text-emerald-500 ml-3.5 tracking-wider font-semibold">SYNCED</span>
+              </div>
 
-            <span className="flex items-center space-x-1">
-              <span className="text-slate-500">Sensors</span>
-              <span className={`w-1.5 h-1.5 rounded-full ${state.sensorsOnline ? 'bg-emerald-400' : 'bg-amber-500'}`} />
-            </span>
-
-            <span className="flex items-center space-x-1 text-slate-300">
-              <Battery className="w-3 h-3 text-emerald-400" />
-              <span>{state.battery}%</span>
-            </span>
-          </div>
+              <div className="flex flex-col items-start">
+                <div className="flex items-center space-x-1.5">
+                  <span className={`w-2 h-2 rounded-full ${state.sensorsOnline ? 'bg-emerald-500' : 'bg-amber-500'}`} />
+                  <span className="text-slate-200 font-medium">Sensors</span>
+                </div>
+                <span className="text-[10px] text-emerald-500 ml-3.5 tracking-wider font-semibold">ACTIVE</span>
+              </div>
+            </div>
+          )}
 
           {/* Simulation Clock */}
-          <div className="flex items-center space-x-1 bg-[#161616] text-slate-200 px-2.5 py-1 rounded border border-[#262626] font-mono">
-            <Clock className="w-3.5 h-3.5 text-amber-400" />
-            <span>{state.currentSimulationTime.toLocaleTimeString()}</span>
+          <div className="flex flex-col items-end border-l border-[#222222] pl-6">
+            <span className="text-slate-400 text-[11px] mb-0.5">{dateStr}</span>
+            <span className="text-slate-100 font-mono text-base">{timeStr}</span>
           </div>
-
-          {/* Complete Demo Trigger Button */}
-          <button
-            onClick={runCompleteDemo}
-            className="flex items-center space-x-1.5 bg-emerald-950 hover:bg-emerald-900 text-emerald-300 border border-emerald-700/60 font-semibold px-2.5 py-1 rounded text-xs transition-all"
-          >
-            <Sparkles className="w-3.5 h-3.5 text-emerald-400 animate-spin" />
-            <span>RUN DEMO</span>
-          </button>
-
-          {/* Viva Mode Toggle */}
-          <button
-            onClick={toggleVivaMode}
-            className={`flex items-center space-x-1 px-2.5 py-1 rounded font-mono text-[11px] border transition-all ${
-              state.isVivaMode
-                ? 'bg-purple-950/80 text-purple-300 border-purple-600'
-                : 'bg-[#161616] text-slate-400 border-[#262626] hover:text-slate-200'
-            }`}
-            title="Toggle Viva Presentation Architecture Overlay"
-          >
-            <GraduationCap className="w-3.5 h-3.5" />
-            <span>VIVA MODE</span>
-          </button>
 
           {/* Settings Button */}
           <button
@@ -102,10 +91,10 @@ export const Header: React.FC<HeaderProps> = ({ activeTab = 'digitalTwin', onOpe
               if (onOpenSettings) onOpenSettings();
               else setIsSettingsOpen(true);
             }}
-            className="p-1.5 text-slate-400 hover:text-slate-200 bg-[#161616] hover:bg-[#222222] border border-[#262626] rounded transition-all"
+            className="text-slate-400 hover:text-slate-200 transition-all ml-2"
             title="Open System Settings"
           >
-            <Settings className="w-3.5 h-3.5" />
+            <Settings className="w-5 h-5" />
           </button>
         </div>
       </header>
@@ -114,3 +103,4 @@ export const Header: React.FC<HeaderProps> = ({ activeTab = 'digitalTwin', onOpe
     </>
   );
 };
+

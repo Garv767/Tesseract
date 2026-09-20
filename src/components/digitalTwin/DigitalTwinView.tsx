@@ -24,7 +24,7 @@ export const DigitalTwinView: React.FC = () => {
         <div>
           <h2 className="text-lg font-bold text-slate-100 flex items-center space-x-2">
             <Cpu className="w-5 h-5 text-cyan-400" />
-            <span>ESP32 SMART MEDICINE STORAGE DIGITAL TWIN</span>
+            <span>ESP32 Tesseract DIGITAL TWIN</span>
           </h2>
           <p className="text-xs text-slate-400 mt-0.5">
             Centralized hardware & software behavioral simulation synchronized with ESP32 edge processing logic.

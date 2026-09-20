@@ -8,7 +8,7 @@ export const Footer: React.FC = () => {
         <div>
           <div className="flex items-center space-x-2 text-cyan-400 font-bold mb-2">
             <Cpu className="w-4 h-4" />
-            <span>Smart Medicine Storage Digital Twin</span>
+            <span>Tesseract Digital Twin</span>
           </div>
           <p className="text-slate-400 text-[11px] leading-relaxed">
             Software Digital Twin simulation demonstrating an IoT intelligent medicine enclosure featuring real-time telemetry, signal pulse flow, edge computing medication adherence state machine, environmental stability monitoring, and reference Embedded C firmware implementation.
