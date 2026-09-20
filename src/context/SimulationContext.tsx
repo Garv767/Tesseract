@@ -7,14 +7,12 @@ import type {
   AlertRecord,
   SystemEvent,
   SignalEvent,
-  SensorReading,
   FailureState,
   HardwareLedState,
   HardwareBuzzerState
 } from '../types/simulation';
 import {
   calculateCompliance,
-  calculateStorageHealth,
   DEMO_STEPS
 } from './simulationLogic';
 
@@ -375,432 +373,109 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     });
   }, []);
 
-  // Main Simulation Tick Loop
+  // Polling backend state
   useEffect(() => {
-    if (!state.simulationRunning) return;
-
-    const intervalTime = 1000 / state.simulationSpeed;
-
-    const timer = setInterval(() => {
-      setState((prev) => {
-        if (prev.failures.powerFailed) {
-          return {
-            ...prev,
-            temperature: 0,
-            humidity: 0,
-            sensorsOnline: false,
-            wifiConnected: false,
-            hardwareOutputs: { led: 'OFF', buzzer: 'OFF' }
-          };
-        }
-
-        const nextTime = new Date(prev.currentSimulationTime.getTime() + 1000 * prev.simulationSpeed);
-
-        let nextTemp = prev.temperature;
-        if (!prev.failures.tempSensorFailed && prev.temperature > 0) {
-          const delta = (Math.random() - 0.5) * 0.1;
-          nextTemp = Number((prev.temperature + delta).toFixed(1));
-        }
-
-        let nextHum = prev.humidity;
-        if (!prev.failures.humiditySensorFailed && prev.humidity > 0) {
-          const delta = Math.round((Math.random() - 0.5) * 0.4);
-          nextHum = Math.max(20, Math.min(90, prev.humidity + delta));
-        }
-
-        const updatedSignals = prev.activeSignals
-          .map((sig) => ({
-            ...sig,
-            progress: Math.min(100, sig.progress + 25)
-          }))
-          .filter((sig) => sig.progress < 100);
-
-        const newReading: SensorReading = {
-          timestamp: nextTime.toLocaleTimeString(),
-          temperature: nextTemp,
-          humidity: nextHum,
-          weight: prev.weight,
-          doorOpen: prev.doorOpen,
-          medicinePresent: prev.medicinePresent,
-          battery: prev.battery,
-          wifiConnected: prev.wifiConnected
-        };
-
-        const updatedHistory = [...prev.sensorHistory.slice(-49), newReading];
-
-        const health = calculateStorageHealth(
-          nextTemp,
-          nextHum,
-          prev.settings,
-          prev.failures
-        );
-
-        let updatedLed: HardwareLedState = prev.hardwareOutputs.led;
-        let updatedBuzzer: HardwareBuzzerState = prev.hardwareOutputs.buzzer;
-
-        if (nextTemp > prev.settings.tempMax || nextTemp < prev.settings.tempMin) {
-          updatedLed = 'WARNING';
-        } else if (prev.hardwareOutputs.led !== 'WARNING') {
-          updatedLed = 'NORMAL';
-        }
-
-        let doorTimer = prev.failures.doorLeftOpenTimer;
-        if (prev.doorOpen) {
-          doorTimer += 1;
-        } else {
-          doorTimer = 0;
-        }
-
-        return {
+    let timer: any;
+    
+    const fetchState = async () => {
+      if (!state.simulationRunning) return;
+      try {
+        const res = await fetch('/api/state');
+        if (!res.ok) throw new Error('API Error');
+        const data = await res.json();
+        
+        setState((prev) => ({
           ...prev,
-          currentSimulationTime: nextTime,
-          temperature: nextTemp,
-          humidity: nextHum,
-          activeSignals: updatedSignals,
-          sensorHistory: updatedHistory,
-          currentDataPacket: newReading,
-          storageHealth: health,
-          hardwareOutputs: {
-            led: updatedLed,
-            buzzer: updatedBuzzer
-          },
-          failures: {
-            ...prev.failures,
-            doorLeftOpenTimer: doorTimer
-          }
-        };
-      });
-    }, intervalTime);
+          temperature: data.temperature,
+          humidity: data.humidity,
+          weight: data.weight,
+          battery: data.battery,
+          doorOpen: data.doorOpen,
+          wifiConnected: data.wifiConnected,
+          rtcSynchronized: data.rtcSynchronized,
+          sensorsOnline: data.sensorsOnline,
+          medicinePresent: data.medicinePresent,
+          currentSimulationTime: new Date(data.currentSimulationTime),
+          compartments: data.compartments || prev.compartments,
+          events: data.events || prev.events,
+          doseHistory: data.doseHistory || prev.doseHistory
+        }));
+      } catch (err) {
+        console.error('Failed to fetch from backend', err);
+      }
+    };
 
+    fetchState(); // initial fetch
+    timer = setInterval(fetchState, 1500);
     return () => clearInterval(timer);
-  }, [state.simulationRunning, state.simulationSpeed]);
+  }, [state.simulationRunning]);
 
-  // Handle Environmental Threshold Alerts
-  useEffect(() => {
-    if (state.temperature > state.settings.tempMax && !state.failures.tempSensorFailed) {
-      addAlert(
-        'ENVIRONMENT',
-        'TEMPERATURE_HIGH',
-        'WARNING',
-        'Storage Temperature High Warning',
-        `Chamber temperature reached ${state.temperature}°C (Limit: ${state.settings.tempMax}°C). Risk of medication degradation.`,
-        'DHT22 Sensor',
-        'TEMPERATURE SENSOR'
-      );
-      logEvent(
-        'TEMPERATURE_VIOLATION',
-        'DHT22 Sensor',
-        `Temperature exceeded upper limit: ${state.temperature}°C`,
-        'WARNING',
-        'TEMPERATURE SENSOR',
-        'GPIO 4 / DHT22',
-        'checkEnvironmentalLimits()'
-      );
+  // PHYSICAL ACTIONS -> Vercel API
+  const sendAction = async (action: string, payload: any = {}) => {
+    try {
+      await fetch('/api/action', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action, payload })
+      });
+    } catch (e) {
+      console.error('API action failed', e);
     }
-  }, [state.temperature, state.settings.tempMax, state.failures.tempSensorFailed, addAlert, logEvent]);
+  };
 
-  // Door Left Open Warning Alert
-  useEffect(() => {
-    if (state.failures.doorLeftOpenTimer >= state.settings.doorOpenWarningSeconds) {
-      addAlert(
-        'HARDWARE',
-        'DOOR_LEFT_OPEN',
-        'WARNING',
-        'Medicine Box Door Left Open',
-        `Storage door has remained open for over ${state.settings.doorOpenWarningSeconds} seconds.`,
-        'Reed Switch',
-        'DOOR / REED SWITCH'
-      );
-    }
-  }, [state.failures.doorLeftOpenTimer, state.settings.doorOpenWarningSeconds, addAlert]);
-
-  // PHYSICAL ACTIONS
   const openDoor = useCallback(() => {
-    setState((prev) => ({
-      ...prev,
-      doorOpen: true,
-      highlightedHardwareComponent: 'DOOR / REED SWITCH',
-      currentFirmwareFunction: 'digitalRead(DOOR_PIN)'
-    }));
-
+    setState((prev) => ({ ...prev, doorOpen: true, highlightedHardwareComponent: 'DOOR / REED SWITCH', currentFirmwareFunction: 'digitalRead(DOOR_PIN)' }));
+    sendAction('OPEN_DOOR');
     triggerSignal('DOOR / REED SWITCH', 'ESP32', 'GPIO', 'GPIO 18', 'Door state: OPEN (LOW)');
-    logEvent(
-      'DOOR_OPENED',
-      'Reed Switch',
-      'Medicine box compartment door opened.',
-      'INFO',
-      'DOOR / REED SWITCH',
-      'GPIO 18',
-      'handleDoorOpenEvent()'
-    );
-  }, [triggerSignal, logEvent]);
+  }, [triggerSignal]);
 
   const closeDoor = useCallback(() => {
-    setState((prev) => ({
-      ...prev,
-      doorOpen: false,
-      hardwareOutputs: {
-        ...prev.hardwareOutputs,
-        buzzer: 'OFF'
-      },
-      highlightedHardwareComponent: 'DOOR / REED SWITCH',
-      currentFirmwareFunction: 'digitalRead(DOOR_PIN)'
-    }));
-
+    setState((prev) => ({ ...prev, doorOpen: false, hardwareOutputs: { ...prev.hardwareOutputs, buzzer: 'OFF' }, highlightedHardwareComponent: 'DOOR / REED SWITCH', currentFirmwareFunction: 'digitalRead(DOOR_PIN)' }));
+    sendAction('CLOSE_DOOR');
     triggerSignal('DOOR / REED SWITCH', 'ESP32', 'GPIO', 'GPIO 18', 'Door state: CLOSED (HIGH)');
-    logEvent(
-      'DOOR_CLOSED',
-      'Reed Switch',
-      'Medicine box door closed and secured.',
-      'INFO',
-      'DOOR / REED SWITCH',
-      'GPIO 18',
-      'handleDoorCloseEvent()'
-    );
-  }, [triggerSignal, logEvent]);
+  }, [triggerSignal]);
 
   const removeMedicine = useCallback((compartmentId: CompartmentId = 'A1') => {
-    setState((prev) => {
-      const targetComp = prev.compartments[compartmentId];
-      if (!targetComp) return prev;
-
-      const updatedCompartments = {
-        ...prev.compartments,
-        [compartmentId]: { ...targetComp, present: false, weight: 0.0 }
-      };
-
-      const totalWeight = Object.values(updatedCompartments).reduce(
-        (acc, c) => acc + c.weight,
-        0
-      );
-
-      const activeSchedule = prev.medicationSchedule.find(
-        (s) => s.compartmentId === compartmentId
-      );
-
-      let updatedDoses = [...prev.doseHistory];
-
-      if (activeSchedule) {
-        const existingIdx = updatedDoses.findIndex(
-          (d) => d.medicationId === activeSchedule.id && d.status !== 'TAKEN'
-        );
-
-        if (existingIdx !== -1) {
-          updatedDoses[existingIdx] = {
-            ...updatedDoses[existingIdx],
-            status: 'TAKEN',
-            actualTime: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-            weightAfter: 0.0,
-            doorOpenedAt: new Date().toLocaleTimeString()
-          };
-        } else {
-          updatedDoses.unshift({
-            id: 'dose-' + Math.random().toString(36).substring(2, 9),
-            medicationId: activeSchedule.id,
-            medicationName: activeSchedule.name,
-            compartmentId,
-            scheduledTime: activeSchedule.scheduledTime,
-            actualTime: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-            status: 'TAKEN',
-            delayMinutes: 3,
-            date: new Date().toISOString().split('T')[0],
-            weightBefore: targetComp.weight,
-            weightAfter: 0.0,
-            doorOpenedAt: new Date().toLocaleTimeString()
-          });
-        }
-      }
-
-      const newCompliance = calculateCompliance(updatedDoses);
-
-      return {
-        ...prev,
-        medicinePresent: false,
-        weight: totalWeight,
-        compartments: updatedCompartments,
-        doseHistory: updatedDoses,
-        compliance: newCompliance,
-        hardwareOutputs: {
-          led: 'NORMAL',
-          buzzer: 'OFF'
-        },
-        highlightedHardwareComponent: 'LOAD CELL',
-        currentFirmwareFunction: 'detectDoseEvent()'
-      };
-    });
-
+    setState((prev) => ({ ...prev, medicinePresent: false, highlightedHardwareComponent: 'LOAD CELL', currentFirmwareFunction: 'detectDoseEvent()' }));
+    sendAction('REMOVE_MEDICINE', { compartmentId });
     triggerSignal('LOAD CELL', 'ESP32', 'ADC', 'GPIO 34', `Weight drop -> 0.0g (${compartmentId})`);
-    logEvent(
-      'MEDICINE_REMOVED',
-      'Load Cell / Proximity',
-      `Medicine container removed from Compartment ${compartmentId}. Valid dose detected.`,
-      'INFO',
-      'Compartment ' + compartmentId,
-      'GPIO 34 / ADC',
-      'detectDoseEvent()'
-    );
-
-    logEvent(
-      'DOSE_TAKEN',
-      'Medication Engine',
-      `Dose marked TAKEN for Compartment ${compartmentId}. Compliance updated.`,
-      'INFO',
-      'Medication Engine',
-      'RTOS Task',
-      'updateDoseStatus()'
-    );
-  }, [triggerSignal, logEvent]);
+  }, [triggerSignal]);
 
   const restoreMedicine = useCallback((compartmentId: CompartmentId = 'A1') => {
-    setState((prev) => {
-      const defaultWeight = INITIAL_SCHEDULE.find((s) => s.compartmentId === compartmentId)?.expectedWeight || 50;
-
-      const updatedCompartments = {
-        ...prev.compartments,
-        [compartmentId]: {
-          ...prev.compartments[compartmentId],
-          present: true,
-          weight: defaultWeight
-        }
-      };
-
-      const totalWeight = Object.values(updatedCompartments).reduce(
-        (acc, c) => acc + c.weight,
-        0
-      );
-
-      return {
-        ...prev,
-        medicinePresent: true,
-        weight: totalWeight,
-        compartments: updatedCompartments,
-        highlightedHardwareComponent: 'Compartment ' + compartmentId,
-        currentFirmwareFunction: 'checkMedicinePresence()'
-      };
-    });
-
+    setState((prev) => ({ ...prev, medicinePresent: true, highlightedHardwareComponent: 'Compartment ' + compartmentId, currentFirmwareFunction: 'checkMedicinePresence()' }));
+    sendAction('RESTORE_MEDICINE', { compartmentId });
     triggerSignal('LOAD CELL', 'ESP32', 'ADC', 'GPIO 34', `Weight restored -> Compartment ${compartmentId}`);
-    logEvent(
-      'MEDICINE_RESTORED',
-      'Load Cell',
-      `Medicine container restored to Compartment ${compartmentId}.`,
-      'INFO',
-      'Compartment ' + compartmentId,
-      'GPIO 34',
-      'readLoadCell()'
-    );
-  }, [triggerSignal, logEvent]);
+  }, [triggerSignal]);
 
-  // ENVIRONMENTAL ADJUSTMENTS
   const raiseTemperature = useCallback((val: number = 3.0) => {
-    setState((prev) => {
-      const nextTemp = Number((prev.temperature + val).toFixed(1));
-      return {
-        ...prev,
-        temperature: nextTemp,
-        highlightedHardwareComponent: 'TEMPERATURE SENSOR',
-        currentFirmwareFunction: 'readSensors()'
-      };
-    });
-    triggerSignal('TEMPERATURE SENSOR', 'ESP32', 'I2C', 'GPIO 4', `Temp rise -> ${state.temperature + val}°C`);
-  }, [state.temperature, triggerSignal]);
+    setState((prev) => ({ ...prev, temperature: prev.temperature + val, highlightedHardwareComponent: 'TEMPERATURE SENSOR', currentFirmwareFunction: 'readSensors()' }));
+    sendAction('ADJUST_TEMP', { value: val });
+    triggerSignal('TEMPERATURE SENSOR', 'ESP32', 'I2C', 'GPIO 4', `Temp rise`);
+  }, [triggerSignal]);
 
   const lowerTemperature = useCallback((val: number = 3.0) => {
-    setState((prev) => ({
-      ...prev,
-      temperature: Math.max(10, Number((prev.temperature - val).toFixed(1))),
-      highlightedHardwareComponent: 'TEMPERATURE SENSOR',
-      currentFirmwareFunction: 'readSensors()'
-    }));
+    setState((prev) => ({ ...prev, temperature: prev.temperature - val, highlightedHardwareComponent: 'TEMPERATURE SENSOR', currentFirmwareFunction: 'readSensors()' }));
+    sendAction('ADJUST_TEMP', { value: -val });
   }, []);
 
   const raiseHumidity = useCallback((val: number = 10) => {
-    setState((prev) => ({
-      ...prev,
-      humidity: Math.min(95, prev.humidity + val),
-      highlightedHardwareComponent: 'HUMIDITY SENSOR',
-      currentFirmwareFunction: 'readSensors()'
-    }));
+    setState((prev) => ({ ...prev, humidity: prev.humidity + val, highlightedHardwareComponent: 'HUMIDITY SENSOR', currentFirmwareFunction: 'readSensors()' }));
   }, []);
 
   const lowerHumidity = useCallback((val: number = 10) => {
-    setState((prev) => ({
-      ...prev,
-      humidity: Math.max(20, prev.humidity - val),
-      highlightedHardwareComponent: 'HUMIDITY SENSOR',
-      currentFirmwareFunction: 'readSensors()'
-    }));
+    setState((prev) => ({ ...prev, humidity: prev.humidity - val, highlightedHardwareComponent: 'HUMIDITY SENSOR', currentFirmwareFunction: 'readSensors()' }));
   }, []);
 
-  // FAILURE CONTROLS
-  const toggleSensorFailure = useCallback((type: 'temp' | 'humidity' | 'door' | 'medicine') => {
-    setState((prev) => {
-      const key = type === 'temp' ? 'tempSensorFailed'
-        : type === 'humidity' ? 'humiditySensorFailed'
-        : type === 'door' ? 'doorSensorFailed'
-        : 'medicineSensorFailed';
-
-      const newVal = !prev.failures[key];
-      const updatedFailures = { ...prev.failures, [key]: newVal };
-
-      return {
-        ...prev,
-        failures: updatedFailures,
-        sensorsOnline: !updatedFailures.tempSensorFailed && !updatedFailures.humiditySensorFailed
-      };
-    });
-
-    logEvent(
-      'SENSOR_FAILURE',
-      'Hardware Fault Injection',
-      `Sensor fault toggled for ${type.toUpperCase()}`,
-      'WARNING',
-      `${type.toUpperCase()} SENSOR`,
-      'GPIO',
-      'checkSensorHealth()'
-    );
-  }, [logEvent]);
-
   const toggleWifi = useCallback(() => {
-    setState((prev) => {
-      const nextWifi = !prev.wifiConnected;
-      return {
-        ...prev,
-        wifiConnected: nextWifi,
-        failures: { ...prev.failures, wifiDisconnected: !nextWifi }
-      };
-    });
+    setState((prev) => ({ ...prev, wifiConnected: !prev.wifiConnected }));
+  }, []);
 
-    logEvent(
-      state.wifiConnected ? 'WIFI_DISCONNECTED' : 'WIFI_CONNECTED',
-      'Wi-Fi Stack',
-      state.wifiConnected ? 'Wi-Fi interface disconnected. Local edge buffering active.' : 'Wi-Fi reconnected to local network.',
-      state.wifiConnected ? 'WARNING' : 'INFO',
-      'WIFI',
-      'Wi-Fi',
-      'checkWiFiConnection()'
-    );
-  }, [state.wifiConnected, logEvent]);
+  const toggleSensorFailure = useCallback((_type: 'temp' | 'humidity' | 'door' | 'medicine') => {
+    // Legacy support for fault injection
+  }, []);
 
   const togglePower = useCallback(() => {
-    setState((prev) => {
-      const nextPower = !prev.failures.powerFailed;
-      return {
-        ...prev,
-        failures: { ...prev.failures, powerFailed: nextPower },
-        hardwareOutputs: { led: nextPower ? 'OFF' : 'NORMAL', buzzer: 'OFF' }
-      };
-    });
-
-    logEvent(
-      'POWER_FAILURE',
-      'Power Supply',
-      'Main power supply interrupted. Local system offline.',
-      'CRITICAL',
-      'POWER SUPPLY',
-      'VCC 5V',
-      'powerFailureISR()'
-    );
+    setState((prev) => ({ ...prev, failures: { ...prev.failures, powerFailed: !prev.failures.powerFailed } }));
   }, [logEvent]);
 
   const toggleLowBattery = useCallback(() => {
