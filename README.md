@@ -9,6 +9,34 @@ Tesseract is a full-stack, serverless IoT dashboard for tracking medical telemet
 - **IoT Hardware Integration**: Securely exposes REST endpoints for ESP32 HTTP POST requests.
 - **Modern UI**: Dark-themed, responsive dashboard built with React and Vite.
 
+## Architecture Diagram
+```mermaid
+graph TD
+    subgraph Hardware [IoT Hardware Layer]
+        ESP[ESP32 Microcontroller]
+        DHT[DHT22 Sensor] -->|Temp/Humidity| ESP
+        LC[HX711 Load Cell] -->|Medicine Weight| ESP
+        RS[Reed Switch] -->|Door State| ESP
+    end
+
+    subgraph Backend [Vercel Serverless Layer]
+        API_A[POST /api/action]
+        API_S[GET /api/state]
+    end
+
+    subgraph Database [Neon Postgres DB]
+        DB[(Serverless PostgreSQL)]
+    end
+
+    subgraph Frontend [Caregiver Dashboard]
+        UI[React + Vite Frontend]
+    end
+
+    ESP -->|HTTP POST| API_A
+    API_A -->|SQL Insert/Update| DB
+    UI -->|HTTP Polling GET| API_S
+    API_S -->|SQL Select| DB
+```
 ## Hardware Setup
 The physical device uses an ESP32 microcontroller with:
 - **DHT22**: Temperature and Humidity sensor.
