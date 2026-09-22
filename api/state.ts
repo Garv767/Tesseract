@@ -6,7 +6,13 @@ export default async function handler(
   response: VercelResponse,
 ) {
   try {
-    const sql = neon(process.env.DATABASE_URL!);
+    if (!process.env.DATABASE_URL) {
+      return response.status(500).json({
+        error: 'DATABASE_URL environment variable is missing on Vercel. Please add DATABASE_URL to your Vercel Project Settings > Environment Variables and redeploy.'
+      });
+    }
+
+    const sql = neon(process.env.DATABASE_URL);
     
     // Fetch latest telemetry
     const telemetryQuery = await sql\`SELECT * FROM telemetry_history ORDER BY id DESC LIMIT 1\`;
