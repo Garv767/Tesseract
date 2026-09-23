@@ -1,4 +1,25 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
+import {
+  LayoutDashboard,
+  LineChart,
+  Bell,
+  Settings,
+  Info,
+  Thermometer,
+  Droplets,
+  Pill,
+  Cpu,
+  Globe,
+  Clock,
+  Database,
+  RefreshCw,
+  AlertTriangle,
+  Activity,
+  HeartPulse,
+  Radio,
+  Sliders,
+  AlertCircle
+} from 'lucide-react';
 import './clean-dashboard.css';
 
 interface TelemetryState {
@@ -86,19 +107,26 @@ export function CleanDashboard() {
         setEvents(data.events);
       }
 
-      setTempHistory((prev) => {
-        const next = [...prev, newTemp];
-        return next.length > 30 ? next.slice(-30) : next;
-      });
-
-      setHumHistory((prev) => {
-        const next = [...prev, newHum];
-        return next.length > 30 ? next.slice(-30) : next;
-      });
+      // If database provided historical records, hydrate the chart
+      if (Array.isArray(data.recentTelemetry) && data.recentTelemetry.length > 0) {
+        const tVals = data.recentTelemetry.map((item: any) => Number(item.temperature));
+        const hVals = data.recentTelemetry.map((item: any) => Number(item.humidity));
+        if (tVals.length > 0) setTempHistory(tVals);
+        if (hVals.length > 0) setHumHistory(hVals);
+      } else {
+        setTempHistory((prev) => {
+          const next = [...prev, newTemp];
+          return next.length > 30 ? next.slice(-30) : next;
+        });
+        setHumHistory((prev) => {
+          const next = [...prev, newHum];
+          return next.length > 30 ? next.slice(-30) : next;
+        });
+      }
 
       setConnectionStatus('online');
-    } catch (err) {
-      console.warn('[Dashboard] Could not fetch real-time state from DB:', err);
+    } catch (err: any) {
+      console.warn('[Dashboard] Could not fetch real-time state from DB:', err?.message || err);
       setConnectionStatus('offline');
     }
   }, [getApiEndpoint]);
@@ -159,7 +187,7 @@ export function CleanDashboard() {
     const bottom = 26;
 
     // Draw grid lines
-    ctx.strokeStyle = '#17283a';
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.06)';
     ctx.lineWidth = 1;
     for (let i = 0; i < 5; i++) {
       const y = top + i * ((height - top - bottom) / 4);
@@ -170,8 +198,8 @@ export function CleanDashboard() {
 
       // Axis labels
       const valLabel = Math.round(max - i * ((max - min) / 4));
-      ctx.fillStyle = '#6280a4';
-      ctx.font = '10px sans-serif';
+      ctx.fillStyle = '#64748b';
+      ctx.font = '10px -apple-system, BlinkMacSystemFont, "SF Mono", monospace';
       ctx.fillText(String(valLabel), 6, y + 3);
     }
 
@@ -187,8 +215,9 @@ export function CleanDashboard() {
       }
     });
 
-    ctx.strokeStyle = type === 'temperature' ? '#3b9cff' : '#35dfab';
-    ctx.lineWidth = 2.5;
+    const lineColor = type === 'temperature' ? '#38bdf8' : '#34d399';
+    ctx.strokeStyle = lineColor;
+    ctx.lineWidth = 2.2;
     ctx.stroke();
 
     // Draw last point circle
@@ -197,11 +226,11 @@ export function CleanDashboard() {
     const lastY = height - bottom - ((lastVal - min) / (max - min)) * (height - top - bottom);
 
     ctx.beginPath();
-    ctx.arc(lastX, lastY, 4.5, 0, Math.PI * 2);
-    ctx.fillStyle = type === 'temperature' ? '#3b9cff' : '#35dfab';
+    ctx.arc(lastX, lastY, 4, 0, Math.PI * 2);
+    ctx.fillStyle = lineColor;
     ctx.fill();
-    ctx.strokeStyle = '#ffffff';
-    ctx.lineWidth = 1.5;
+    ctx.strokeStyle = '#08090d';
+    ctx.lineWidth = 2;
     ctx.stroke();
   }, []);
 
@@ -218,7 +247,7 @@ export function CleanDashboard() {
   }, [activeTab, tempHistory, humHistory, renderChart]);
 
   const testAlert = () => {
-    alert('Smart Medicine Storage\n\nAlert system test successful.\nReal-time monitoring active.');
+    alert('Tesseract Smart Medicine Storage\n\nAlert system test successful.\nReal-time monitoring active.');
   };
 
   const isTempNormal = state.temperature >= 15 && state.temperature <= 25;
@@ -230,7 +259,9 @@ export function CleanDashboard() {
       <aside className="clean-sidebar">
         <div>
           <div className="clean-logo">
-            <div className="clean-logo-icon">+</div>
+            <div className="clean-logo-icon">
+              <HeartPulse size={24} strokeWidth={2.5} />
+            </div>
             <div className="clean-logo-text">
               TESSERACT<br />
               MEDICINE STORAGE
@@ -242,31 +273,36 @@ export function CleanDashboard() {
               className={`clean-nav-item ${activeTab === 'dashboard' ? 'active' : ''}`}
               onClick={() => setActiveTab('dashboard')}
             >
-              <span>📊</span> Dashboard
+              <LayoutDashboard size={18} />
+              <span>Dashboard</span>
             </div>
             <div
               className={`clean-nav-item ${activeTab === 'analytics' ? 'active' : ''}`}
               onClick={() => setActiveTab('analytics')}
             >
-              <span>📈</span> Analytics
+              <LineChart size={18} />
+              <span>Analytics</span>
             </div>
             <div
               className={`clean-nav-item ${activeTab === 'events' ? 'active' : ''}`}
               onClick={() => setActiveTab('events')}
             >
-              <span>🔔</span> Events {events.length > 0 && `(${events.length})`}
+              <Bell size={18} />
+              <span>Events {events.length > 0 && `(${events.length})`}</span>
             </div>
             <div
               className={`clean-nav-item ${activeTab === 'settings' ? 'active' : ''}`}
               onClick={() => setActiveTab('settings')}
             >
-              <span>⚙️</span> Settings
+              <Settings size={18} />
+              <span>Settings</span>
             </div>
             <div
               className={`clean-nav-item ${activeTab === 'about' ? 'active' : ''}`}
               onClick={() => setActiveTab('about')}
             >
-              <span>ℹ️</span> About
+              <Info size={18} />
+              <span>About</span>
             </div>
           </nav>
         </div>
@@ -293,16 +329,30 @@ export function CleanDashboard() {
               }`}
             >
               <span className="clean-online-dot"></span>
-              {connectionStatus === 'online'
-                ? 'ESP32 ONLINE'
-                : connectionStatus === 'syncing'
-                ? 'SYNCING DB...'
-                : 'DB OFFLINE'}
+              {connectionStatus === 'online' ? (
+                <>
+                  <Radio size={13} style={{ marginRight: '6px' }} />
+                  <span>ESP32 ONLINE</span>
+                </>
+              ) : connectionStatus === 'syncing' ? (
+                <>
+                  <RefreshCw size={13} className="animate-spin" style={{ marginRight: '6px' }} />
+                  <span>SYNCING DB...</span>
+                </>
+              ) : (
+                <>
+                  <AlertCircle size={13} style={{ marginRight: '6px' }} />
+                  <span>DB OFFLINE</span>
+                </>
+              )}
             </div>
 
             <div className="clean-clock">
               <div>{currentDate}</div>
-              <strong style={{ color: '#f8fafc', fontSize: '13px' }}>{currentTime}</strong>
+              <div style={{ color: '#f8fafc', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '4px', justifyContent: 'flex-end', marginTop: '2px' }}>
+                <Clock size={12} style={{ color: '#7890ad' }} />
+                <strong>{currentTime}</strong>
+              </div>
             </div>
           </div>
         </header>
@@ -315,7 +365,10 @@ export function CleanDashboard() {
               {/* TEMPERATURE CARD */}
               <div className="clean-card">
                 <div className="clean-card-header">
-                  <div className="clean-card-title">TEMPERATURE</div>
+                  <div className="clean-card-title">
+                    <Thermometer size={16} style={{ color: '#38bdf8' }} />
+                    <span>TEMPERATURE</span>
+                  </div>
                   <div className="clean-card-subtitle">DHT11 (GPIO 4)</div>
                 </div>
                 <div className="clean-gauge-area">
@@ -349,7 +402,10 @@ export function CleanDashboard() {
               {/* HUMIDITY CARD */}
               <div className="clean-card">
                 <div className="clean-card-header">
-                  <div className="clean-card-title">HUMIDITY</div>
+                  <div className="clean-card-title">
+                    <Droplets size={16} style={{ color: '#20c8dc' }} />
+                    <span>HUMIDITY</span>
+                  </div>
                   <div className="clean-card-subtitle">DHT11 (GPIO 4)</div>
                 </div>
                 <div className="clean-gauge-area">
@@ -382,11 +438,20 @@ export function CleanDashboard() {
               {/* MEDICINE STATUS CARD */}
               <div className="clean-card">
                 <div className="clean-card-header">
-                  <div className="clean-card-title">MEDICINE STATUS</div>
+                  <div className="clean-card-title">
+                    <Pill size={16} style={{ color: state.medicinePresent ? '#34d399' : '#ff5965' }} />
+                    <span>MEDICINE STATUS</span>
+                  </div>
                   <div className="clean-card-subtitle">IR SENSOR (GPIO 18)</div>
                 </div>
                 <div className="clean-medicine-body">
-                  <div className={`clean-medicine-icon ${state.medicinePresent ? 'present' : ''}`}>+</div>
+                  <div className={`clean-medicine-icon ${state.medicinePresent ? 'present' : ''}`}>
+                    {state.medicinePresent ? (
+                      <Pill size={42} strokeWidth={2} />
+                    ) : (
+                      <AlertCircle size={42} strokeWidth={2} />
+                    )}
+                  </div>
                   <div className={`clean-medicine-status ${state.medicinePresent ? 'present' : ''}`}>
                     {state.medicinePresent ? 'MEDICINE PRESENT' : 'MEDICINE NOT PRESENT'}
                   </div>
@@ -408,7 +473,10 @@ export function CleanDashboard() {
             <section className="clean-chart-grid">
               <div className="clean-card clean-chart-card">
                 <div className="clean-chart-header">
-                  <div className="clean-chart-title">Temperature (&deg;C)</div>
+                  <div className="clean-chart-title" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <Thermometer size={16} style={{ color: '#3b9cff' }} />
+                    <span>Temperature (&deg;C)</span>
+                  </div>
                   <div className="clean-live-tag">
                     <span className="clean-live-dot"></span> Live DB Stream
                   </div>
@@ -418,7 +486,10 @@ export function CleanDashboard() {
 
               <div className="clean-card clean-chart-card">
                 <div className="clean-chart-header">
-                  <div className="clean-chart-title">Humidity (%)</div>
+                  <div className="clean-chart-title" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <Droplets size={16} style={{ color: '#35dfab' }} />
+                    <span>Humidity (%)</span>
+                  </div>
                   <div className="clean-live-tag">
                     <span className="clean-live-dot"></span> Live DB Stream
                   </div>
@@ -432,25 +503,36 @@ export function CleanDashboard() {
               {/* DEVICE INFORMATION */}
               <div className="clean-card">
                 <div className="clean-card-header">
-                  <div className="clean-card-title">DEVICE INFORMATION</div>
+                  <div className="clean-card-title">
+                    <Cpu size={16} style={{ color: '#94a3b8' }} />
+                    <span>DEVICE INFORMATION</span>
+                  </div>
                 </div>
                 <div className="clean-info-body">
                   <div className="clean-info-row">
-                    <span className="clean-info-label">Device</span>
+                    <span className="clean-info-label">
+                      <Cpu size={14} /> Device
+                    </span>
                     <span className="clean-info-value">{state.deviceId}</span>
                   </div>
                   <div className="clean-info-row">
-                    <span className="clean-info-label">Host / Origin</span>
+                    <span className="clean-info-label">
+                      <Globe size={14} /> Host / Origin
+                    </span>
                     <span className="clean-info-value">
                       {typeof window !== 'undefined' ? window.location.hostname : 'Cloud'}
                     </span>
                   </div>
                   <div className="clean-info-row">
-                    <span className="clean-info-label">Client Uptime</span>
+                    <span className="clean-info-label">
+                      <Clock size={14} /> Client Uptime
+                    </span>
                     <span className="clean-info-value">{uptimeStr}</span>
                   </div>
                   <div className="clean-info-row">
-                    <span className="clean-info-label">Last DB Sync</span>
+                    <span className="clean-info-label">
+                      <Database size={14} /> Last DB Sync
+                    </span>
                     <span className="clean-info-value">{state.lastUpdated}</span>
                   </div>
                 </div>
@@ -459,13 +541,17 @@ export function CleanDashboard() {
               {/* ENVIRONMENTAL STATUS */}
               <div className="clean-card">
                 <div className="clean-card-header">
-                  <div className="clean-card-title">ENVIRONMENTAL STATUS</div>
+                  <div className="clean-card-title">
+                    <Activity size={16} style={{ color: '#94a3b8' }} />
+                    <span>ENVIRONMENTAL STATUS</span>
+                  </div>
                 </div>
                 <div>
                   <div className="clean-environment-row">
                     <div className="clean-env-left">
                       <span className={`clean-env-dot ${isTempNormal ? 'green' : 'red'}`}></span>
-                      Temperature
+                      <Thermometer size={14} style={{ color: '#38bdf8' }} />
+                      <span>Temperature</span>
                     </div>
                     <div className={`clean-badge ${isTempNormal ? 'clean-badge-green' : 'clean-badge-red'}`}>
                       {isTempNormal ? 'NORMAL' : 'WARNING'}
@@ -476,7 +562,8 @@ export function CleanDashboard() {
                   <div className="clean-environment-row">
                     <div className="clean-env-left">
                       <span className={`clean-env-dot ${isHumOptimal ? 'green' : 'red'}`}></span>
-                      Humidity
+                      <Droplets size={14} style={{ color: '#20c8dc' }} />
+                      <span>Humidity</span>
                     </div>
                     <div className={`clean-badge ${isHumOptimal ? 'clean-badge-green' : 'clean-badge-red'}`}>
                       {isHumOptimal ? 'OPTIMAL' : 'WARNING'}
@@ -487,7 +574,8 @@ export function CleanDashboard() {
                   <div className="clean-environment-row">
                     <div className="clean-env-left">
                       <span className={`clean-env-dot ${state.medicinePresent ? 'green' : 'red'}`}></span>
-                      Medicine
+                      <Pill size={14} style={{ color: '#34d399' }} />
+                      <span>Medicine</span>
                     </div>
                     <div className={`clean-badge ${state.medicinePresent ? 'clean-badge-green' : 'clean-badge-red'}`}>
                       {state.medicinePresent ? 'PRESENT' : 'NOT PRESENT'}
@@ -500,14 +588,19 @@ export function CleanDashboard() {
               {/* QUICK ACTIONS */}
               <div className="clean-card">
                 <div className="clean-card-header">
-                  <div className="clean-card-title">QUICK ACTIONS</div>
+                  <div className="clean-card-title">
+                    <Sliders size={16} style={{ color: '#94a3b8' }} />
+                    <span>QUICK ACTIONS</span>
+                  </div>
                 </div>
                 <div className="clean-actions">
                   <button className="clean-action-btn" onClick={fetchRealtimeData}>
-                    🔄 Refresh Data Now
+                    <RefreshCw size={15} className={connectionStatus === 'syncing' ? 'animate-spin' : ''} />
+                    <span>Refresh Data Now</span>
                   </button>
                   <button className="clean-action-btn secondary" onClick={testAlert}>
-                    ⚠️ Test System Alert
+                    <AlertTriangle size={15} />
+                    <span>Test System Alert</span>
                   </button>
                   <div style={{ color: '#7892b1', fontSize: '11px', marginTop: '14px', textAlign: 'center' }}>
                     Real-time Neon DB telemetry for healthcare compliance
@@ -522,7 +615,10 @@ export function CleanDashboard() {
         {activeTab === 'analytics' && (
           <div className="clean-subpage">
             <div className="clean-card" style={{ padding: '24px' }}>
-              <h2 style={{ margin: '0 0 16px 0', fontSize: '18px', color: '#f8fafc' }}>Telemetry Analytics</h2>
+              <h2 style={{ margin: '0 0 16px 0', fontSize: '18px', color: '#f8fafc', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <LineChart size={20} style={{ color: '#38bdf8' }} />
+                <span>Telemetry Analytics</span>
+              </h2>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '16px' }}>
                 <div style={{ background: '#09111d', padding: '16px', borderRadius: '10px', border: '1px solid #17283a' }}>
                   <div style={{ color: '#7890ad', fontSize: '12px' }}>Min Temperature</div>
@@ -557,7 +653,10 @@ export function CleanDashboard() {
         {activeTab === 'events' && (
           <div className="clean-subpage">
             <div className="clean-card" style={{ padding: '20px' }}>
-              <h2 style={{ margin: '0 0 16px 0', fontSize: '18px', color: '#f8fafc' }}>Database Event Log</h2>
+              <h2 style={{ margin: '0 0 16px 0', fontSize: '18px', color: '#f8fafc', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <Bell size={20} style={{ color: '#38bdf8' }} />
+                <span>Database Event Log</span>
+              </h2>
               {events.length === 0 ? (
                 <p style={{ color: '#64748b' }}>No system events recorded yet.</p>
               ) : (
@@ -604,7 +703,10 @@ export function CleanDashboard() {
         {activeTab === 'settings' && (
           <div className="clean-subpage">
             <div className="clean-card" style={{ padding: '24px' }}>
-              <h2 style={{ margin: '0 0 16px 0', fontSize: '18px', color: '#f8fafc' }}>Deployment &amp; API Settings</h2>
+              <h2 style={{ margin: '0 0 16px 0', fontSize: '18px', color: '#f8fafc', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <Settings size={20} style={{ color: '#38bdf8' }} />
+                <span>Deployment &amp; API Settings</span>
+              </h2>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', maxWidth: '600px' }}>
                 <div>
                   <label style={{ color: '#7890ad', fontSize: '13px', display: 'block', marginBottom: '6px' }}>
@@ -652,22 +754,31 @@ export function CleanDashboard() {
         {activeTab === 'about' && (
           <div className="clean-subpage">
             <div className="clean-card" style={{ padding: '24px' }}>
-              <h2 style={{ margin: '0 0 16px 0', fontSize: '18px', color: '#f8fafc' }}>About Smart Medicine Storage</h2>
+              <h2 style={{ margin: '0 0 16px 0', fontSize: '18px', color: '#f8fafc', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <Info size={20} style={{ color: '#38bdf8' }} />
+                <span>About Tesseract</span>
+              </h2>
               <p style={{ color: '#94a3b8', lineHeight: 1.6 }}>
                 Full-stack IoT healthcare management system designed with ESP32 microcontroller, environmental telemetry
                 sensors, and serverless Neon Postgres backend.
               </p>
               <div style={{ marginTop: '20px', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '14px' }}>
                 <div style={{ background: '#09111d', padding: '14px', borderRadius: '8px', border: '1px solid #17283a' }}>
-                  <strong style={{ color: '#38bdf8' }}>DHT11 Sensor</strong>
+                  <strong style={{ color: '#38bdf8', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <Thermometer size={16} /> DHT11 Sensor
+                  </strong>
                   <p style={{ margin: '6px 0 0', color: '#94a3b8', fontSize: '13px' }}>GPIO 4 | Temperature &amp; Humidity</p>
                 </div>
                 <div style={{ background: '#09111d', padding: '14px', borderRadius: '8px', border: '1px solid #17283a' }}>
-                  <strong style={{ color: '#34d399' }}>IR Presence Sensor</strong>
+                  <strong style={{ color: '#34d399', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <Pill size={16} /> IR Presence Sensor
+                  </strong>
                   <p style={{ margin: '6px 0 0', color: '#94a3b8', fontSize: '13px' }}>GPIO 18 | Medicine Detection</p>
                 </div>
                 <div style={{ background: '#09111d', padding: '14px', borderRadius: '8px', border: '1px solid #17283a' }}>
-                  <strong style={{ color: '#f59e0b' }}>Vercel Serverless</strong>
+                  <strong style={{ color: '#f59e0b', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <Database size={16} /> Vercel Serverless
+                  </strong>
                   <p style={{ margin: '6px 0 0', color: '#94a3b8', fontSize: '13px' }}>Edge API + Neon Serverless Postgres</p>
                 </div>
               </div>
@@ -676,7 +787,7 @@ export function CleanDashboard() {
         )}
 
         <footer className="clean-footer">
-          &copy; 2026 Smart Medicine Storage &nbsp;|&nbsp; Built with ESP32 &nbsp;|&nbsp; Monitor &bull; Protect &bull; Stay Healthy
+          &copy; 2026 Tesseract &nbsp;|&nbsp; Built with ESP32 &nbsp;|&nbsp; Monitor &bull; Protect &bull; Stay Healthy
         </footer>
       </main>
     </div>
