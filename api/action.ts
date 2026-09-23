@@ -40,7 +40,27 @@ export default async function handler(
     }
 
     const sql = neon(dbUrl);
-    const { action, payload } = request.body;
+
+    let rawBody = request.body;
+    if (typeof rawBody === 'string') {
+      try {
+        rawBody = JSON.parse(rawBody);
+      } catch (e) {
+        console.warn('Could not parse request.body as JSON string');
+      }
+    }
+    rawBody = (rawBody && typeof rawBody === 'object') ? rawBody : {};
+
+    const action = rawBody.action || rawBody.event || rawBody.type;
+    let payload = rawBody.payload;
+    if (typeof payload === 'string') {
+      try {
+        payload = JSON.parse(payload);
+      } catch (e) {}
+    }
+    if (!payload || typeof payload !== 'object') {
+      payload = rawBody;
+    }
 
     const currentTelemetryQuery = await sql`SELECT * FROM telemetry_history ORDER BY id DESC LIMIT 1`;
     const current = currentTelemetryQuery[0] || {
@@ -53,7 +73,7 @@ export default async function handler(
       door_open: false,
     };
 
-    const deviceId = payload?.deviceId || current.device_id || 'ESP32-001';
+    const deviceId = payload?.deviceId || payload?.device_id || current.device_id || 'ESP32-001';
     const act = String(action || '').trim().toUpperCase();
 
     if (act === 'REPORT_TELEMETRY' || act === 'UPDATE_TELEMETRY') {
@@ -61,7 +81,9 @@ export default async function handler(
       const humidity = payload?.humidity !== undefined ? Number(payload.humidity) : current.humidity;
       
       let parsed = toBooleanPresence(payload?.medicinePresent);
+      if (parsed === undefined) parsed = toBooleanPresence(payload?.medicine_present);
       if (parsed === undefined) parsed = toBooleanPresence(payload?.medicine);
+      if (parsed === undefined) parsed = toBooleanPresence(payload?.medicineStatus);
       if (parsed === undefined) parsed = toBooleanPresence(payload?.status);
       if (parsed === undefined) parsed = toBooleanPresence(payload?.event);
       if (parsed === undefined && payload?.weight !== undefined) {
@@ -85,6 +107,15 @@ export default async function handler(
         INSERT INTO telemetry_history (device_id, temperature, humidity, weight, medicine_present, battery, door_open) 
         VALUES (${deviceId}, ${temperature}, ${humidity}, ${weight}, ${medicine_present}, ${battery}, ${door_open})
       `;
+
+      // Auto-record to medicine_events if presence changed during periodic telemetry
+      if (parsed !== undefined && parsed !== Boolean(current.medicine_present)) {
+        await sql`
+          INSERT INTO medicine_events (device_id, compartment_id, event)
+          VALUES (${deviceId}, 'A1', ${parsed ? 'PRESENT' : 'ABSENT'})
+        `;
+      }
+
       await sql`
         INSERT INTO system_events (event_type, source, description, severity, related_component) 
         VALUES ('TELEMETRY_SYNC', ${deviceId}, 'Periodic telemetry synced from hardware.', 'INFO', 'ESP32 CORE')
@@ -137,21 +168,21 @@ export default async function handler(
         VALUES ('MEDICINE_ABSENT', 'IR Sensor', 'Medicine container removed from compartment ' || ${compId}, 'INFO', ${'Compartment ' + compId})
       `;
     }
-    else if (action === 'OPEN_DOOR') {
+    else if (act === 'OPEN_DOOR') {
       await sql`
         INSERT INTO telemetry_history (device_id, temperature, humidity, weight, medicine_present, battery, door_open) 
         VALUES (${deviceId}, ${current.temperature}, ${current.humidity}, ${current.weight}, ${current.medicine_present ?? true}, ${current.battery}, true)
       `;
       await sql`INSERT INTO system_events (event_type, source, description, severity, related_component) VALUES ('DOOR_OPENED', 'Reed Switch', 'Medicine box compartment door opened.', 'INFO', 'DOOR / REED SWITCH')`;
     } 
-    else if (action === 'CLOSE_DOOR') {
+    else if (act === 'CLOSE_DOOR') {
       await sql`
         INSERT INTO telemetry_history (device_id, temperature, humidity, weight, medicine_present, battery, door_open) 
         VALUES (${deviceId}, ${current.temperature}, ${current.humidity}, ${current.weight}, ${current.medicine_present ?? true}, ${current.battery}, false)
       `;
       await sql`INSERT INTO system_events (event_type, source, description, severity, related_component) VALUES ('DOOR_CLOSED', 'Reed Switch', 'Medicine box door closed and secured.', 'INFO', 'DOOR / REED SWITCH')`;
     }
-    else if (action === 'REMOVE_MEDICINE') {
+    else if (act === 'REMOVE_MEDICINE') {
       const compId = payload?.compartmentId || 'A1';
 
       await sql`
@@ -174,7 +205,7 @@ export default async function handler(
       
       await sql`INSERT INTO system_events (event_type, source, description, severity, related_component) VALUES ('MEDICINE_REMOVED', 'Load Cell', 'Medicine container removed. Valid dose detected.', 'INFO', 'Compartment ${compId}')`;
     }
-    else if (action === 'RESTORE_MEDICINE') {
+    else if (act === 'RESTORE_MEDICINE') {
       const compId = payload?.compartmentId || 'A1';
 
       await sql`
@@ -191,7 +222,7 @@ export default async function handler(
       `;
       await sql`INSERT INTO system_events (event_type, source, description, severity, related_component) VALUES ('MEDICINE_RESTORED', 'Load Cell', 'Medicine container restored.', 'INFO', 'Compartment ${compId}')`;
     }
-    else if (action === 'ADJUST_TEMP') {
+    else if (act === 'ADJUST_TEMP') {
       const newTemp = Number(current.temperature) + (payload?.value || 0);
       await sql`
         INSERT INTO telemetry_history (device_id, temperature, humidity, weight, medicine_present, battery, door_open) 
