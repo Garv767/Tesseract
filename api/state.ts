@@ -27,9 +27,7 @@ export default async function handler(
     const sql = neon(dbUrl);
     
     // 1. Fetch latest telemetry
-    let telemetry: any = {
-      temperature: 24.0, humidity: 48.0, weight: 50.0, battery: 98, door_open: false
-    };
+    let telemetry: any = null;
     try {
       const telemetryQuery = await sql`SELECT * FROM telemetry_history ORDER BY id DESC LIMIT 1`;
       if (telemetryQuery && telemetryQuery.length > 0) {
@@ -39,6 +37,13 @@ export default async function handler(
       console.warn('Could not read telemetry_history:', e);
     }
 
+    // Determine actual hardware connectivity based on telemetry timestamp
+    // ESP32 reports every 10s. If last ping is > 40s ago, device is OFFLINE.
+    const lastSeenTime = telemetry?.created_at ? new Date(telemetry.created_at).getTime() : 0;
+    const now = Date.now();
+    const diffSeconds = lastSeenTime > 0 ? Math.max(0, Math.floor((now - lastSeenTime) / 1000)) : 999999;
+    const isDeviceOnline = lastSeenTime > 0 && diffSeconds <= 40;
+
     // 2. Fetch compartments
     let compartments: Record<string, any> = {};
     let medications: any[] = [];
@@ -47,7 +52,7 @@ export default async function handler(
       medications.forEach((med: any) => {
         compartments[med.compartment_id] = {
           medicineName: med.name,
-          present: Number(telemetry.weight) > 0,
+          present: telemetry ? Boolean(telemetry.medicine_present) : false,
           weight: med.expected_weight
         };
       });
@@ -90,24 +95,27 @@ export default async function handler(
       console.warn('Could not read recent telemetry:', e);
     }
 
-    const tempVal = Number(telemetry.temperature ?? 24.0);
-    const humVal = Number(telemetry.humidity ?? 48.0);
-    const weightVal = Number(telemetry.weight ?? 50.0);
-    const isMedicinePresent = telemetry.medicine_present !== undefined 
+    const tempVal = telemetry ? Number(telemetry.temperature ?? 0) : 0;
+    const humVal = telemetry ? Number(telemetry.humidity ?? 0) : 0;
+    const weightVal = telemetry ? Number(telemetry.weight ?? 0) : 0;
+    const isMedicinePresent = telemetry?.medicine_present !== undefined && telemetry?.medicine_present !== null
       ? Boolean(telemetry.medicine_present) 
-      : (weightVal > 0);
-    const deviceId = telemetry.device_id || 'ESP32-001';
+      : false;
+    const deviceId = telemetry?.device_id || 'ESP32-001';
 
     return response.status(200).json({
       deviceId,
       temperature: tempVal,
       humidity: humVal,
       weight: weightVal,
-      battery: telemetry.battery ?? 98,
-      doorOpen: Boolean(telemetry.door_open),
-      wifiConnected: true,
-      rtcSynchronized: true,
-      sensorsOnline: true,
+      battery: telemetry ? Number(telemetry.battery ?? 0) : 0,
+      doorOpen: Boolean(telemetry?.door_open),
+      wifiConnected: isDeviceOnline,
+      rtcSynchronized: isDeviceOnline,
+      sensorsOnline: isDeviceOnline,
+      isDeviceOnline,
+      lastSeenSecondsAgo: diffSeconds,
+      lastSeenAt: telemetry?.created_at || null,
       medicinePresent: isMedicinePresent,
       currentSimulationTime: new Date().toISOString(),
       compartments,

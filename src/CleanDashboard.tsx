@@ -54,20 +54,20 @@ interface MedicineEvent {
 export function CleanDashboard() {
   const [activeTab, setActiveTab] = useState<'dashboard' | 'analytics' | 'events' | 'settings' | 'about'>('dashboard');
   const [state, setState] = useState<TelemetryState>({
-    temperature: 24.2,
-    humidity: 48.5,
-    medicinePresent: true,
+    temperature: 0,
+    humidity: 0,
+    medicinePresent: false,
     doorOpen: false,
-    deviceId: 'ESP32 (GPIO 4)',
-    weight: 50.0,
-    battery: 98,
-    lastUpdated: new Date().toLocaleTimeString(),
+    deviceId: 'ESP32-001',
+    weight: 0,
+    battery: 0,
+    lastUpdated: 'Waiting for device...',
   });
 
   const [events, setEvents] = useState<SystemEvent[]>([]);
   const [medicineEvents, setMedicineEvents] = useState<MedicineEvent[]>([]);
-  const [tempHistory, setTempHistory] = useState<number[]>([23.8, 24.0, 24.1, 24.2]);
-  const [humHistory, setHumHistory] = useState<number[]>([47.5, 48.0, 48.2, 48.5]);
+  const [tempHistory, setTempHistory] = useState<number[]>([0, 0, 0, 0]);
+  const [humHistory, setHumHistory] = useState<number[]>([0, 0, 0, 0]);
   const [connectionStatus, setConnectionStatus] = useState<'online' | 'syncing' | 'offline'>('syncing');
   const [currentTime, setCurrentTime] = useState<string>(new Date().toLocaleTimeString());
   const [currentDate, setCurrentDate] = useState<string>(new Date().toLocaleDateString());
@@ -87,7 +87,6 @@ export function CleanDashboard() {
   // Fetch real-time data from backend database (/api/state)
   const fetchRealtimeData = useCallback(async () => {
     try {
-      setConnectionStatus((prev) => (prev === 'offline' ? 'syncing' : prev));
       const res = await fetch(getApiEndpoint());
       if (!res.ok) {
         const errPayload = await res.json().catch(async () => ({ error: await res.text().catch(() => '') }));
@@ -95,21 +94,22 @@ export function CleanDashboard() {
       }
       const data = await res.json();
 
-      const newTemp = Number(data.temperature ?? 24.0);
-      const newHum = Number(data.humidity ?? 50.0);
-      const isMedicine = data.medicinePresent !== undefined 
-        ? Boolean(data.medicinePresent) 
-        : (data.weight !== undefined ? Number(data.weight) > 0 : true);
+      const isOnline = Boolean(data.isDeviceOnline ?? data.sensorsOnline);
+      const newTemp = Number(data.temperature ?? 0);
+      const newHum = Number(data.humidity ?? 0);
+      const isMedicine = Boolean(data.medicinePresent);
 
       setState({
         temperature: newTemp,
         humidity: newHum,
         medicinePresent: isMedicine,
         doorOpen: Boolean(data.doorOpen),
-        deviceId: data.deviceId || 'ESP32 (GPIO 4)',
-        weight: Number(data.weight ?? 50.0),
-        battery: Number(data.battery ?? 95),
-        lastUpdated: new Date().toLocaleTimeString(),
+        deviceId: data.deviceId || 'ESP32-001',
+        weight: Number(data.weight ?? 0),
+        battery: Number(data.battery ?? 0),
+        lastUpdated: data.lastSeenAt 
+          ? new Date(data.lastSeenAt).toLocaleTimeString() 
+          : new Date().toLocaleTimeString(),
       });
 
       if (Array.isArray(data.events)) {
@@ -126,7 +126,7 @@ export function CleanDashboard() {
         const hVals = data.recentTelemetry.map((item: any) => Number(item.humidity));
         if (tVals.length > 0) setTempHistory(tVals);
         if (hVals.length > 0) setHumHistory(hVals);
-      } else {
+      } else if (isOnline && (newTemp > 0 || newHum > 0)) {
         setTempHistory((prev) => {
           const next = [...prev, newTemp];
           return next.length > 30 ? next.slice(-30) : next;
@@ -137,7 +137,7 @@ export function CleanDashboard() {
         });
       }
 
-      setConnectionStatus('online');
+      setConnectionStatus(isOnline ? 'online' : 'offline');
     } catch (err: any) {
       console.warn('[Dashboard] Could not fetch real-time state from DB:', err?.message || err);
       setConnectionStatus('offline');
@@ -350,12 +350,12 @@ export function CleanDashboard() {
               ) : connectionStatus === 'syncing' ? (
                 <>
                   <RefreshCw size={13} className="animate-spin" style={{ marginRight: '6px' }} />
-                  <span>SYNCING DB...</span>
+                  <span>CONNECTING...</span>
                 </>
               ) : (
                 <>
                   <AlertCircle size={13} style={{ marginRight: '6px' }} />
-                  <span>DB OFFLINE</span>
+                  <span>ESP32 DISCONNECTED</span>
                 </>
               )}
             </div>
@@ -389,11 +389,11 @@ export function CleanDashboard() {
                     <div className="clean-gauge-bg"></div>
                     <div className="clean-temp-ring"></div>
                     <div className="clean-gauge-value">
-                      <span>{state.temperature.toFixed(1)}</span> &deg;C
+                      <span>{connectionStatus === 'offline' && state.temperature === 0 ? '--' : state.temperature.toFixed(1)}</span> &deg;C
                     </div>
                   </div>
-                  <div className={`clean-gauge-status ${isTempNormal ? '' : 'warning'}`}>
-                    {isTempNormal ? 'NORMAL' : 'WARNING'}
+                  <div className={`clean-gauge-status ${connectionStatus === 'offline' ? 'offline' : (isTempNormal ? '' : 'warning')}`}>
+                    {connectionStatus === 'offline' ? 'OFFLINE' : (isTempNormal ? 'NORMAL' : 'WARNING')}
                   </div>
                   <div className="clean-range-row">
                     <div>
@@ -425,11 +425,11 @@ export function CleanDashboard() {
                   <div className="clean-humidity-gauge">
                     <div className="clean-humidity-progress"></div>
                     <div className="clean-humidity-value">
-                      <span>{state.humidity.toFixed(1)}</span> %
+                      <span>{connectionStatus === 'offline' && state.humidity === 0 ? '--' : state.humidity.toFixed(1)}</span> %
                     </div>
                   </div>
-                  <div className={`clean-gauge-status ${isHumOptimal ? '' : 'warning'}`}>
-                    {isHumOptimal ? 'OPTIMAL' : 'WARNING'}
+                  <div className={`clean-gauge-status ${connectionStatus === 'offline' ? 'offline' : (isHumOptimal ? '' : 'warning')}`}>
+                    {connectionStatus === 'offline' ? 'OFFLINE' : (isHumOptimal ? 'OPTIMAL' : 'WARNING')}
                   </div>
                   <div className="clean-range-row">
                     <div>
@@ -452,31 +452,67 @@ export function CleanDashboard() {
               <div className="clean-card">
                 <div className="clean-card-header">
                   <div className="clean-card-title">
-                    <Pill size={16} style={{ color: state.medicinePresent ? '#34d399' : '#ff5965' }} />
+                    <Pill
+                      size={16}
+                      style={{
+                        color:
+                          connectionStatus === 'offline'
+                            ? '#64748b'
+                            : state.medicinePresent
+                            ? '#34d399'
+                            : '#fb7185',
+                      }}
+                    />
                     <span>MEDICINE STATUS</span>
                   </div>
                   <div className="clean-card-subtitle">IR SENSOR (GPIO 18)</div>
                 </div>
                 <div className="clean-medicine-body">
-                  <div className={`clean-medicine-icon ${state.medicinePresent ? 'present' : ''}`}>
-                    {state.medicinePresent ? (
-                      <Pill size={42} strokeWidth={2} />
+                  <div
+                    className={`clean-medicine-icon ${
+                      connectionStatus === 'offline'
+                        ? 'offline'
+                        : state.medicinePresent
+                        ? 'present'
+                        : ''
+                    }`}
+                  >
+                    {connectionStatus === 'offline' ? (
+                      <Pill size={40} strokeWidth={1.8} />
+                    ) : state.medicinePresent ? (
+                      <Pill size={40} strokeWidth={2} />
                     ) : (
-                      <AlertCircle size={42} strokeWidth={2} />
+                      <AlertCircle size={40} strokeWidth={2} />
                     )}
                   </div>
-                  <div className={`clean-medicine-status ${state.medicinePresent ? 'present' : ''}`}>
-                    {state.medicinePresent ? 'MEDICINE PRESENT' : 'MEDICINE NOT PRESENT'}
+                  <div
+                    className={`clean-medicine-status ${
+                      connectionStatus === 'offline'
+                        ? 'offline'
+                        : state.medicinePresent
+                        ? 'present'
+                        : ''
+                    }`}
+                  >
+                    {connectionStatus === 'offline'
+                      ? 'DEVICE OFFLINE'
+                      : state.medicinePresent
+                      ? 'MEDICINE PRESENT'
+                      : 'MEDICINE ABSENT'}
                   </div>
                   <div className="clean-medicine-description">
-                    {state.medicinePresent
-                      ? 'Medicine detected in the compartment.'
-                      : 'No medicine detected in the compartment.'}
+                    {connectionStatus === 'offline'
+                      ? 'ESP32 is not streaming. Awaiting live IR telemetry.'
+                      : state.medicinePresent
+                      ? 'Medicine detected in compartment A1.'
+                      : 'No medicine detected in compartment A1.'}
                   </div>
                   <div className="clean-alert-box">
-                    {state.medicinePresent
-                      ? 'Medicine stock detected and available.'
-                      : 'Please restock the medicine to ensure uninterrupted availability.'}
+                    {connectionStatus === 'offline'
+                      ? 'Hardware disconnected. Connect ESP32 to monitor medicine compartment.'
+                      : state.medicinePresent
+                      ? 'Medicine stock verified and available.'
+                      : 'Compartment A1 is empty. Please restock.'}
                   </div>
                 </div>
               </div>
@@ -586,14 +622,40 @@ export function CleanDashboard() {
 
                   <div className="clean-environment-row">
                     <div className="clean-env-left">
-                      <span className={`clean-env-dot ${state.medicinePresent ? 'green' : 'red'}`}></span>
+                      <span
+                        className={`clean-env-dot ${
+                          connectionStatus === 'offline'
+                            ? 'gray'
+                            : state.medicinePresent
+                            ? 'green'
+                            : 'red'
+                        }`}
+                      ></span>
                       <Pill size={14} style={{ color: '#34d399' }} />
                       <span>Medicine</span>
                     </div>
-                    <div className={`clean-badge ${state.medicinePresent ? 'clean-badge-green' : 'clean-badge-red'}`}>
-                      {state.medicinePresent ? 'PRESENT' : 'NOT PRESENT'}
+                    <div
+                      className={`clean-badge ${
+                        connectionStatus === 'offline'
+                          ? 'clean-badge-gray'
+                          : state.medicinePresent
+                          ? 'clean-badge-green'
+                          : 'clean-badge-red'
+                      }`}
+                    >
+                      {connectionStatus === 'offline'
+                        ? 'OFFLINE'
+                        : state.medicinePresent
+                        ? 'PRESENT'
+                        : 'NOT PRESENT'}
                     </div>
-                    <strong style={{ color: '#f8fafc' }}>{state.medicinePresent ? 'Available' : 'Empty'}</strong>
+                    <strong style={{ color: '#f8fafc' }}>
+                      {connectionStatus === 'offline'
+                        ? 'No Signal'
+                        : state.medicinePresent
+                        ? 'Available'
+                        : 'Empty'}
+                    </strong>
                   </div>
                 </div>
               </div>

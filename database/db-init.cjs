@@ -54,7 +54,7 @@ async function initDb() {
         temperature DECIMAL(5,2),
         humidity DECIMAL(5,2),
         weight DECIMAL(5,2),
-        medicine_present BOOLEAN DEFAULT true,
+        medicine_present BOOLEAN DEFAULT false,
         battery INTEGER,
         door_open BOOLEAN,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -63,7 +63,8 @@ async function initDb() {
 
   // Safely ensure columns exist if telemetry_history was already created previously
   await sql`ALTER TABLE telemetry_history ADD COLUMN IF NOT EXISTS device_id VARCHAR(50) DEFAULT 'ESP32-001'`;
-  await sql`ALTER TABLE telemetry_history ADD COLUMN IF NOT EXISTS medicine_present BOOLEAN DEFAULT true`;
+  await sql`ALTER TABLE telemetry_history ADD COLUMN IF NOT EXISTS medicine_present BOOLEAN DEFAULT false`;
+  await sql`ALTER TABLE telemetry_history ALTER COLUMN medicine_present SET DEFAULT false`;
 
   await sql`
     CREATE TABLE IF NOT EXISTS medicine_events (

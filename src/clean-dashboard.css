@@ -342,6 +342,12 @@
   color: #fb7185;
 }
 
+.clean-gauge-status.offline {
+  border-color: rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-dim);
+}
+
 .clean-range-row {
   display: flex;
   justify-content: space-between;
@@ -429,6 +435,13 @@
   box-shadow: 0 0 24px rgba(16, 185, 129, 0.15);
 }
 
+.clean-medicine-icon.offline {
+  border-color: rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.02);
+  color: var(--text-dim);
+  box-shadow: none;
+}
+
 .clean-medicine-status {
   color: #fb7185;
   font-size: 18px;
@@ -441,6 +454,10 @@
 
 .clean-medicine-status.present {
   color: #34d399;
+}
+
+.clean-medicine-status.offline {
+  color: var(--text-dim);
 }
 
 .clean-medicine-description {
@@ -590,6 +607,11 @@
   box-shadow: 0 0 6px rgba(251, 113, 133, 0.4);
 }
 
+.clean-env-dot.gray {
+  background: #64748b;
+  box-shadow: none;
+}
+
 .clean-badge {
   padding: 3px 9px;
   border-radius: 5px;
@@ -608,6 +630,12 @@
   background: rgba(244, 63, 94, 0.08);
   color: #fb7185;
   border: 1px solid rgba(244, 63, 94, 0.25);
+}
+
+.clean-badge-gray {
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-dim);
+  border: 1px solid rgba(255, 255, 255, 0.08);
 }
 
 /* Quick Actions */

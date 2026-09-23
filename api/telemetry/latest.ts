@@ -31,30 +31,39 @@ export default async function handler(
     if (!telemetryQuery || telemetryQuery.length === 0) {
       return response.status(200).json({
         deviceId: 'ESP32-001',
-        temperature: 24.0,
-        humidity: 48.0,
-        weight: 50.0,
-        medicinePresent: true,
-        battery: 98,
+        temperature: 0,
+        humidity: 0,
+        weight: 0,
+        medicinePresent: false,
+        battery: 0,
         doorOpen: false,
-        timestamp: new Date().toISOString()
+        isOnline: false,
+        lastSeenSecondsAgo: 999999,
+        timestamp: null
       });
     }
 
     const item = telemetryQuery[0];
-    const weightVal = Number(item.weight ?? 50.0);
+    const weightVal = Number(item.weight ?? 0);
     const medicinePresent = item.medicine_present !== undefined && item.medicine_present !== null
       ? Boolean(item.medicine_present)
-      : weightVal > 0;
+      : false;
+
+    const diffSeconds = item.created_at 
+      ? Math.max(0, Math.floor((Date.now() - new Date(item.created_at).getTime()) / 1000))
+      : 999999;
+    const isOnline = diffSeconds <= 40;
 
     return response.status(200).json({
       deviceId: item.device_id || 'ESP32-001',
-      temperature: Number(item.temperature ?? 24.0),
-      humidity: Number(item.humidity ?? 48.0),
+      temperature: Number(item.temperature ?? 0),
+      humidity: Number(item.humidity ?? 0),
       weight: weightVal,
       medicinePresent,
-      battery: item.battery !== undefined ? Number(item.battery) : 98,
+      battery: item.battery !== undefined ? Number(item.battery) : 0,
       doorOpen: Boolean(item.door_open),
+      isOnline,
+      lastSeenSecondsAgo: diffSeconds,
       timestamp: item.created_at ? new Date(item.created_at).toISOString() : new Date().toISOString()
     });
   } catch (error: any) {
