@@ -50,13 +50,36 @@ async function initDb() {
   await sql`
     CREATE TABLE IF NOT EXISTS telemetry_history (
         id SERIAL PRIMARY KEY,
+        device_id VARCHAR(50) DEFAULT 'ESP32-001',
         temperature DECIMAL(5,2),
         humidity DECIMAL(5,2),
         weight DECIMAL(5,2),
+        medicine_present BOOLEAN DEFAULT true,
         battery INTEGER,
         door_open BOOLEAN,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
+  `;
+
+  // Safely ensure columns exist if telemetry_history was already created previously
+  await sql`ALTER TABLE telemetry_history ADD COLUMN IF NOT EXISTS device_id VARCHAR(50) DEFAULT 'ESP32-001'`;
+  await sql`ALTER TABLE telemetry_history ADD COLUMN IF NOT EXISTS medicine_present BOOLEAN DEFAULT true`;
+
+  await sql`
+    CREATE TABLE IF NOT EXISTS medicine_events (
+        id SERIAL PRIMARY KEY,
+        device_id VARCHAR(50) DEFAULT 'ESP32-001',
+        compartment_id VARCHAR(20) NOT NULL,
+        event VARCHAR(20) NOT NULL,
+        timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+  `;
+
+  // Create telemetry view to match standard telemetry table queries if needed
+  await sql`
+    CREATE OR REPLACE VIEW telemetry AS 
+    SELECT id, device_id, temperature, humidity, weight, medicine_present, battery, door_open, created_at AS timestamp 
+    FROM telemetry_history
   `;
 
   const counts = await sql`SELECT COUNT(*) as count FROM medications`;

@@ -32,42 +32,123 @@ export default async function handler(
 
     const currentTelemetryQuery = await sql`SELECT * FROM telemetry_history ORDER BY id DESC LIMIT 1`;
     const current = currentTelemetryQuery[0] || {
+      device_id: 'ESP32-001',
       temperature: 24.0,
       humidity: 45.0,
       weight: 50.0,
+      medicine_present: true,
       battery: 100,
       door_open: false,
     };
 
+    const deviceId = payload?.deviceId || current.device_id || 'ESP32-001';
+
     if (action === 'REPORT_TELEMETRY' || action === 'UPDATE_TELEMETRY') {
       const temperature = payload?.temperature !== undefined ? Number(payload.temperature) : current.temperature;
-      let weight = payload?.weight !== undefined ? Number(payload.weight) : current.weight;
-      if (payload?.medicine !== undefined || payload?.medicinePresent !== undefined) {
-        const isMed = payload?.medicine !== undefined ? Boolean(payload.medicine) : Boolean(payload.medicinePresent);
-        weight = isMed ? 50.0 : 0.0;
+      const humidity = payload?.humidity !== undefined ? Number(payload.humidity) : current.humidity;
+      
+      let medicine_present = current.medicine_present !== undefined ? Boolean(current.medicine_present) : true;
+      if (payload?.medicinePresent !== undefined) {
+        medicine_present = Boolean(payload.medicinePresent);
+      } else if (payload?.medicine !== undefined) {
+        medicine_present = Boolean(payload.medicine);
+      } else if (payload?.weight !== undefined) {
+        medicine_present = Number(payload.weight) > 0;
       }
+
+      let weight = payload?.weight !== undefined 
+        ? Number(payload.weight) 
+        : (medicine_present ? (Number(current.weight) > 0 ? Number(current.weight) : 50.0) : 0.0);
+      
       const battery = payload?.battery !== undefined ? Number(payload.battery) : current.battery;
       const door_open = payload?.doorOpen !== undefined 
         ? Boolean(payload.doorOpen) 
         : (payload?.door_open !== undefined ? Boolean(payload.door_open) : current.door_open);
 
-      await sql`INSERT INTO telemetry_history (temperature, humidity, weight, battery, door_open) VALUES (${temperature}, ${humidity}, ${weight}, ${battery}, ${door_open})`;
-      await sql`INSERT INTO system_events (event_type, source, description, severity, related_component) VALUES ('TELEMETRY_SYNC', 'ESP32 Device', 'Periodic telemetry synced from hardware.', 'INFO', 'ESP32 CORE')`;
+      await sql`
+        INSERT INTO telemetry_history (device_id, temperature, humidity, weight, medicine_present, battery, door_open) 
+        VALUES (${deviceId}, ${temperature}, ${humidity}, ${weight}, ${medicine_present}, ${battery}, ${door_open})
+      `;
+      await sql`
+        INSERT INTO system_events (event_type, source, description, severity, related_component) 
+        VALUES ('TELEMETRY_SYNC', ${deviceId}, 'Periodic telemetry synced from hardware.', 'INFO', 'ESP32 CORE')
+      `;
+    }
+    else if (action === 'MEDICINE_PRESENT') {
+      const compId = payload?.compartmentId || 'A1';
+
+      await sql`
+        INSERT INTO medicine_events (device_id, compartment_id, event) 
+        VALUES (${deviceId}, ${compId}, 'PRESENT')
+      `;
+
+      const expected = await sql`SELECT expected_weight FROM medications WHERE compartment_id = ${compId} LIMIT 1`;
+      const w = expected.length > 0 ? Number(expected[0].expected_weight) : 50.0;
+
+      await sql`
+        INSERT INTO telemetry_history (device_id, temperature, humidity, weight, medicine_present, battery, door_open) 
+        VALUES (${deviceId}, ${current.temperature}, ${current.humidity}, ${w}, true, ${current.battery}, ${current.door_open})
+      `;
+
+      await sql`
+        INSERT INTO system_events (event_type, source, description, severity, related_component) 
+        VALUES ('MEDICINE_PRESENT', 'IR Sensor', 'Medicine container detected in compartment ' || ${compId}, 'INFO', ${'Compartment ' + compId})
+      `;
+    }
+    else if (action === 'MEDICINE_ABSENT') {
+      const compId = payload?.compartmentId || 'A1';
+
+      await sql`
+        INSERT INTO medicine_events (device_id, compartment_id, event) 
+        VALUES (${deviceId}, ${compId}, 'ABSENT')
+      `;
+
+      await sql`
+        INSERT INTO telemetry_history (device_id, temperature, humidity, weight, medicine_present, battery, door_open) 
+        VALUES (${deviceId}, ${current.temperature}, ${current.humidity}, 0.0, false, ${current.battery}, ${current.door_open})
+      `;
+
+      const med = await sql`SELECT id FROM medications WHERE compartment_id = ${compId} LIMIT 1`;
+      if (med.length > 0) {
+        await sql`
+          INSERT INTO dose_history (medication_id, compartment_id, scheduled_time, actual_time, status, weight_before, weight_after)
+          VALUES (${med[0].id}, ${compId}, 'Scheduled', 'Now', 'TAKEN', ${current.weight}, 0.0)
+        `;
+      }
+
+      await sql`
+        INSERT INTO system_events (event_type, source, description, severity, related_component) 
+        VALUES ('MEDICINE_ABSENT', 'IR Sensor', 'Medicine container removed from compartment ' || ${compId}, 'INFO', ${'Compartment ' + compId})
+      `;
     }
     else if (action === 'OPEN_DOOR') {
-      await sql`INSERT INTO telemetry_history (temperature, humidity, weight, battery, door_open) VALUES (${current.temperature}, ${current.humidity}, ${current.weight}, ${current.battery}, true)`;
+      await sql`
+        INSERT INTO telemetry_history (device_id, temperature, humidity, weight, medicine_present, battery, door_open) 
+        VALUES (${deviceId}, ${current.temperature}, ${current.humidity}, ${current.weight}, ${current.medicine_present ?? true}, ${current.battery}, true)
+      `;
       await sql`INSERT INTO system_events (event_type, source, description, severity, related_component) VALUES ('DOOR_OPENED', 'Reed Switch', 'Medicine box compartment door opened.', 'INFO', 'DOOR / REED SWITCH')`;
     } 
     else if (action === 'CLOSE_DOOR') {
-      await sql`INSERT INTO telemetry_history (temperature, humidity, weight, battery, door_open) VALUES (${current.temperature}, ${current.humidity}, ${current.weight}, ${current.battery}, false)`;
+      await sql`
+        INSERT INTO telemetry_history (device_id, temperature, humidity, weight, medicine_present, battery, door_open) 
+        VALUES (${deviceId}, ${current.temperature}, ${current.humidity}, ${current.weight}, ${current.medicine_present ?? true}, ${current.battery}, false)
+      `;
       await sql`INSERT INTO system_events (event_type, source, description, severity, related_component) VALUES ('DOOR_CLOSED', 'Reed Switch', 'Medicine box door closed and secured.', 'INFO', 'DOOR / REED SWITCH')`;
     }
     else if (action === 'REMOVE_MEDICINE') {
-      await sql`INSERT INTO telemetry_history (temperature, humidity, weight, battery, door_open) VALUES (${current.temperature}, ${current.humidity}, 0.0, ${current.battery}, ${current.door_open})`;
-      
       const compId = payload?.compartmentId || 'A1';
-      const med = await sql`SELECT id FROM medications WHERE compartment_id = ${compId} LIMIT 1`;
+
+      await sql`
+        INSERT INTO medicine_events (device_id, compartment_id, event) 
+        VALUES (${deviceId}, ${compId}, 'ABSENT')
+      `;
+
+      await sql`
+        INSERT INTO telemetry_history (device_id, temperature, humidity, weight, medicine_present, battery, door_open) 
+        VALUES (${deviceId}, ${current.temperature}, ${current.humidity}, 0.0, false, ${current.battery}, ${current.door_open})
+      `;
       
+      const med = await sql`SELECT id FROM medications WHERE compartment_id = ${compId} LIMIT 1`;
       if (med.length > 0) {
         await sql`
           INSERT INTO dose_history (medication_id, compartment_id, scheduled_time, actual_time, status, weight_before, weight_after)
@@ -79,15 +160,27 @@ export default async function handler(
     }
     else if (action === 'RESTORE_MEDICINE') {
       const compId = payload?.compartmentId || 'A1';
+
+      await sql`
+        INSERT INTO medicine_events (device_id, compartment_id, event) 
+        VALUES (${deviceId}, ${compId}, 'PRESENT')
+      `;
+
       const expected = await sql`SELECT expected_weight FROM medications WHERE compartment_id = ${compId} LIMIT 1`;
-      const w = expected.length > 0 ? expected[0].expected_weight : 50.0;
+      const w = expected.length > 0 ? Number(expected[0].expected_weight) : 50.0;
       
-      await sql`INSERT INTO telemetry_history (temperature, humidity, weight, battery, door_open) VALUES (${current.temperature}, ${current.humidity}, ${w}, ${current.battery}, ${current.door_open})`;
+      await sql`
+        INSERT INTO telemetry_history (device_id, temperature, humidity, weight, medicine_present, battery, door_open) 
+        VALUES (${deviceId}, ${current.temperature}, ${current.humidity}, ${w}, true, ${current.battery}, ${current.door_open})
+      `;
       await sql`INSERT INTO system_events (event_type, source, description, severity, related_component) VALUES ('MEDICINE_RESTORED', 'Load Cell', 'Medicine container restored.', 'INFO', 'Compartment ${compId}')`;
     }
     else if (action === 'ADJUST_TEMP') {
       const newTemp = Number(current.temperature) + (payload?.value || 0);
-      await sql`INSERT INTO telemetry_history (temperature, humidity, weight, battery, door_open) VALUES (${newTemp}, ${current.humidity}, ${current.weight}, ${current.battery}, ${current.door_open})`;
+      await sql`
+        INSERT INTO telemetry_history (device_id, temperature, humidity, weight, medicine_present, battery, door_open) 
+        VALUES (${deviceId}, ${newTemp}, ${current.humidity}, ${current.weight}, ${current.medicine_present ?? true}, ${current.battery}, ${current.door_open})
+      `;
     }
 
     return response.status(200).json({ success: true });

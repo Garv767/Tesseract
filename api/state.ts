@@ -63,7 +63,7 @@ export default async function handler(
       console.warn('Could not read dose_history:', e);
     }
 
-    // 4. Fetch system events
+    // 4. Fetch system events & medicine events
     let events: any[] = [];
     try {
       events = await sql`SELECT * FROM system_events ORDER BY id DESC LIMIT 20`;
@@ -71,10 +71,21 @@ export default async function handler(
       console.warn('Could not read system_events:', e);
     }
 
+    let medicineEvents: any[] = [];
+    try {
+      medicineEvents = await sql`SELECT * FROM medicine_events ORDER BY id DESC LIMIT 20`;
+    } catch (e) {
+      console.warn('Could not read medicine_events:', e);
+    }
+
     // 5. Fetch recent telemetry points for chart hydration
     let recentTelemetry: any[] = [];
     try {
-      recentTelemetry = await sql`SELECT temperature, humidity, weight, created_at FROM telemetry_history ORDER BY id DESC LIMIT 30`;
+      recentTelemetry = await sql`
+        SELECT temperature, humidity, weight, medicine_present, created_at 
+        FROM telemetry_history 
+        ORDER BY id DESC LIMIT 30
+      `;
     } catch (e) {
       console.warn('Could not read recent telemetry:', e);
     }
@@ -82,9 +93,13 @@ export default async function handler(
     const tempVal = Number(telemetry.temperature ?? 24.0);
     const humVal = Number(telemetry.humidity ?? 48.0);
     const weightVal = Number(telemetry.weight ?? 50.0);
+    const isMedicinePresent = telemetry.medicine_present !== undefined 
+      ? Boolean(telemetry.medicine_present) 
+      : (weightVal > 0);
+    const deviceId = telemetry.device_id || 'ESP32-001';
 
     return response.status(200).json({
-      deviceId: 'MED-ESP32-001',
+      deviceId,
       temperature: tempVal,
       humidity: humVal,
       weight: weightVal,
@@ -93,12 +108,13 @@ export default async function handler(
       wifiConnected: true,
       rtcSynchronized: true,
       sensorsOnline: true,
-      medicinePresent: weightVal > 0,
+      medicinePresent: isMedicinePresent,
       currentSimulationTime: new Date().toISOString(),
       compartments,
       medicationSchedule: medications,
       doseHistory: history,
       events,
+      medicineEvents,
       recentTelemetry: recentTelemetry.reverse()
     });
   } catch (error: any) {

@@ -43,6 +43,14 @@ interface SystemEvent {
   created_at: string;
 }
 
+interface MedicineEvent {
+  id: number;
+  device_id: string;
+  compartment_id: string;
+  event: string;
+  timestamp: string;
+}
+
 export function CleanDashboard() {
   const [activeTab, setActiveTab] = useState<'dashboard' | 'analytics' | 'events' | 'settings' | 'about'>('dashboard');
   const [state, setState] = useState<TelemetryState>({
@@ -57,6 +65,7 @@ export function CleanDashboard() {
   });
 
   const [events, setEvents] = useState<SystemEvent[]>([]);
+  const [medicineEvents, setMedicineEvents] = useState<MedicineEvent[]>([]);
   const [tempHistory, setTempHistory] = useState<number[]>([23.8, 24.0, 24.1, 24.2]);
   const [humHistory, setHumHistory] = useState<number[]>([47.5, 48.0, 48.2, 48.5]);
   const [connectionStatus, setConnectionStatus] = useState<'online' | 'syncing' | 'offline'>('syncing');
@@ -105,6 +114,10 @@ export function CleanDashboard() {
 
       if (Array.isArray(data.events)) {
         setEvents(data.events);
+      }
+
+      if (Array.isArray(data.medicineEvents)) {
+        setMedicineEvents(data.medicineEvents);
       }
 
       // If database provided historical records, hydrate the chart
@@ -652,6 +665,45 @@ export function CleanDashboard() {
         {/* TAB 3: EVENTS VIEW */}
         {activeTab === 'events' && (
           <div className="clean-subpage">
+            {/* MEDICINE IR EVENTS CARD */}
+            <div className="clean-card" style={{ padding: '20px' }}>
+              <h2 style={{ margin: '0 0 16px 0', fontSize: '18px', color: '#f8fafc', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <Pill size={20} style={{ color: '#34d399' }} />
+                <span>Medicine Presence Events (IR Sensor)</span>
+              </h2>
+              {medicineEvents.length === 0 ? (
+                <p style={{ color: '#64748b' }}>No IR sensor medicine transitions logged yet.</p>
+              ) : (
+                <div style={{ overflowX: 'auto' }}>
+                  <table className="clean-table">
+                    <thead>
+                      <tr>
+                        <th>Time</th>
+                        <th>Device</th>
+                        <th>Compartment</th>
+                        <th>State</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {medicineEvents.map((me, i) => (
+                        <tr key={me.id || i}>
+                          <td style={{ color: '#94a3b8' }}>{me.timestamp ? new Date(me.timestamp).toLocaleTimeString() : 'Recent'}</td>
+                          <td style={{ color: '#38bdf8', fontFamily: 'monospace' }}>{me.device_id || 'ESP32-001'}</td>
+                          <td style={{ fontWeight: 600 }}>{me.compartment_id || 'A1'}</td>
+                          <td>
+                            <span className={`clean-badge ${me.event === 'PRESENT' ? 'clean-badge-green' : 'clean-badge-red'}`}>
+                              {me.event}
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+
+            {/* SYSTEM EVENT LOG CARD */}
             <div className="clean-card" style={{ padding: '20px' }}>
               <h2 style={{ margin: '0 0 16px 0', fontSize: '18px', color: '#f8fafc', display: 'flex', alignItems: 'center', gap: '8px' }}>
                 <Bell size={20} style={{ color: '#38bdf8' }} />
