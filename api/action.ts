@@ -30,8 +30,11 @@ export default async function handler(
 
     if (action === 'REPORT_TELEMETRY' || action === 'UPDATE_TELEMETRY') {
       const temperature = payload?.temperature !== undefined ? Number(payload.temperature) : current.temperature;
-      const humidity = payload?.humidity !== undefined ? Number(payload.humidity) : current.humidity;
-      const weight = payload?.weight !== undefined ? Number(payload.weight) : current.weight;
+      let weight = payload?.weight !== undefined ? Number(payload.weight) : current.weight;
+      if (payload?.medicine !== undefined || payload?.medicinePresent !== undefined) {
+        const isMed = payload?.medicine !== undefined ? Boolean(payload.medicine) : Boolean(payload.medicinePresent);
+        weight = isMed ? 50.0 : 0.0;
+      }
       const battery = payload?.battery !== undefined ? Number(payload.battery) : current.battery;
       const door_open = payload?.doorOpen !== undefined 
         ? Boolean(payload.doorOpen) 
