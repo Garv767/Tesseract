@@ -428,7 +428,8 @@ void handleData() {
   json += "\"temperature\":" + String(temperature, 1) + ",";
   json += "\"humidity\":" + String(humidity, 1) + ",";
   json += "\"weight\":" + String(currentWeight, 1) + ",";
-  json += "\"medicinePresent\":" + String(medicinePresent ? "true" : "false");
+  json += "\"medicinePresent\":" + String(medicinePresent ? "true" : "false") + ",";
+  json += "\"rawIrPin18\":" + String(digitalRead(MEDICINE_IR_PIN));
   json += "}";
 
   server.send(200, "application/json", json);
@@ -748,14 +749,16 @@ void loop() {
 
   unsigned long currentMillis = millis();
 
-  // 1. Read DHT11 every 2 seconds
+  // 1. Read DHT11 & IR Pin every 2 seconds
   if (currentMillis - lastSensorRead >= SENSOR_READ_INTERVAL_MS) {
     float newT = dht.readTemperature();
     float newH = dht.readHumidity();
     if (!isnan(newT) && !isnan(newH)) {
       temperature = newT;
       humidity = newH;
-      Serial.printf("[DHT11] Temp: %.1f °C | Humidity: %.1f %%\n", temperature, humidity);
+      int rawIr = digitalRead(MEDICINE_IR_PIN);
+      Serial.printf("[Sensors] Temp: %.1f °C | Humidity: %.1f %% | Pin 18 Raw: %d (Medicine: %s)\n",
+                    temperature, humidity, rawIr, medicinePresent ? "PRESENT" : "ABSENT");
     } else {
       Serial.println("[DHT11] Warning: Read failed");
     }
