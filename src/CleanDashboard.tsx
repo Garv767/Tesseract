@@ -60,7 +60,8 @@ export function CleanDashboard() {
       setConnectionStatus((prev) => (prev === 'offline' ? 'syncing' : prev));
       const res = await fetch(getApiEndpoint());
       if (!res.ok) {
-        throw new Error(`HTTP ${res.status}`);
+        const errPayload = await res.json().catch(async () => ({ error: await res.text().catch(() => '') }));
+        throw new Error(errPayload.error || errPayload.details || `HTTP ${res.status}`);
       }
       const data = await res.json();
 
@@ -231,7 +232,7 @@ export function CleanDashboard() {
           <div className="clean-logo">
             <div className="clean-logo-icon">+</div>
             <div className="clean-logo-text">
-              SMART<br />
+              TESSERACT<br />
               MEDICINE STORAGE
             </div>
           </div>
@@ -281,8 +282,8 @@ export function CleanDashboard() {
         {/* HEADER */}
         <header className="clean-header">
           <div className="clean-header-title">
-            <h1>Smart Medicine Storage</h1>
-            <p>Monitor &nbsp;•&nbsp; Protect &nbsp;•&nbsp; Stay Healthy</p>
+            <h1>Tesseract</h1>
+            <p>Smart Medicine Storage &nbsp;•&nbsp; Monitor &nbsp;•&nbsp; Protect</p>
           </div>
 
           <div className="clean-header-right">
