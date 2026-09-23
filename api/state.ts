@@ -98,9 +98,14 @@ export default async function handler(
     const tempVal = telemetry ? Number(telemetry.temperature ?? 0) : 0;
     const humVal = telemetry ? Number(telemetry.humidity ?? 0) : 0;
     const weightVal = telemetry ? Number(telemetry.weight ?? 0) : 0;
-    const isMedicinePresent = telemetry?.medicine_present !== undefined && telemetry?.medicine_present !== null
-      ? Boolean(telemetry.medicine_present) 
-      : false;
+    // Determine medicine presence: check latest medicine_event ('PRESENT' vs 'ABSENT') or telemetry_history boolean
+    let isMedicinePresent = false;
+    if (medicineEvents.length > 0) {
+      const latestEvt = String(medicineEvents[0].event || '').trim().toUpperCase();
+      isMedicinePresent = latestEvt === 'PRESENT';
+    } else if (telemetry?.medicine_present !== undefined && telemetry?.medicine_present !== null) {
+      isMedicinePresent = Boolean(telemetry.medicine_present);
+    }
     const deviceId = telemetry?.device_id || 'ESP32-001';
 
     return response.status(200).json({
@@ -117,6 +122,7 @@ export default async function handler(
       lastSeenSecondsAgo: diffSeconds,
       lastSeenAt: telemetry?.created_at || null,
       medicinePresent: isMedicinePresent,
+      medicineStatus: isMedicinePresent ? 'PRESENT' : 'ABSENT',
       currentSimulationTime: new Date().toISOString(),
       compartments,
       medicationSchedule: medications,

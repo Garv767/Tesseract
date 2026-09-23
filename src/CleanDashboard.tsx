@@ -97,7 +97,10 @@ export function CleanDashboard() {
       const isOnline = Boolean(data.isDeviceOnline ?? data.sensorsOnline);
       const newTemp = Number(data.temperature ?? 0);
       const newHum = Number(data.humidity ?? 0);
-      const isMedicine = Boolean(data.medicinePresent);
+      const isMedicine = Boolean(data.medicinePresent) ||
+        String(data.medicinePresent || '').toUpperCase() === 'PRESENT' ||
+        String(data.medicineStatus || '').toUpperCase() === 'PRESENT' ||
+        (Array.isArray(data.medicineEvents) && data.medicineEvents.length > 0 && String(data.medicineEvents[0]?.event || '').toUpperCase() === 'PRESENT');
 
       setState({
         temperature: newTemp,

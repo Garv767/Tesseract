@@ -1,6 +1,18 @@
 import { neon } from '@neondatabase/serverless';
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 
+function toBooleanPresence(val: any): boolean | undefined {
+  if (val === undefined || val === null) return undefined;
+  if (typeof val === 'boolean') return val;
+  if (typeof val === 'string') {
+    const s = val.trim().toLowerCase();
+    if (s === 'present' || s === 'true' || s === '1' || s === 'detected') return true;
+    if (s === 'absent' || s === 'false' || s === '0' || s === 'empty') return false;
+  }
+  if (typeof val === 'number') return val > 0;
+  return undefined;
+}
+
 export default async function handler(
   request: VercelRequest,
   response: VercelResponse,
@@ -36,25 +48,29 @@ export default async function handler(
       temperature: 24.0,
       humidity: 45.0,
       weight: 50.0,
-      medicine_present: true,
+      medicine_present: false,
       battery: 100,
       door_open: false,
     };
 
     const deviceId = payload?.deviceId || current.device_id || 'ESP32-001';
+    const act = String(action || '').trim().toUpperCase();
 
-    if (action === 'REPORT_TELEMETRY' || action === 'UPDATE_TELEMETRY') {
+    if (act === 'REPORT_TELEMETRY' || act === 'UPDATE_TELEMETRY') {
       const temperature = payload?.temperature !== undefined ? Number(payload.temperature) : current.temperature;
       const humidity = payload?.humidity !== undefined ? Number(payload.humidity) : current.humidity;
       
-      let medicine_present = current.medicine_present !== undefined ? Boolean(current.medicine_present) : true;
-      if (payload?.medicinePresent !== undefined) {
-        medicine_present = Boolean(payload.medicinePresent);
-      } else if (payload?.medicine !== undefined) {
-        medicine_present = Boolean(payload.medicine);
-      } else if (payload?.weight !== undefined) {
-        medicine_present = Number(payload.weight) > 0;
+      let parsed = toBooleanPresence(payload?.medicinePresent);
+      if (parsed === undefined) parsed = toBooleanPresence(payload?.medicine);
+      if (parsed === undefined) parsed = toBooleanPresence(payload?.status);
+      if (parsed === undefined) parsed = toBooleanPresence(payload?.event);
+      if (parsed === undefined && payload?.weight !== undefined) {
+        parsed = Number(payload.weight) > 0;
       }
+
+      const medicine_present = parsed !== undefined 
+        ? parsed 
+        : (current.medicine_present !== undefined ? Boolean(current.medicine_present) : false);
 
       let weight = payload?.weight !== undefined 
         ? Number(payload.weight) 
@@ -74,7 +90,7 @@ export default async function handler(
         VALUES ('TELEMETRY_SYNC', ${deviceId}, 'Periodic telemetry synced from hardware.', 'INFO', 'ESP32 CORE')
       `;
     }
-    else if (action === 'MEDICINE_PRESENT') {
+    else if (act === 'MEDICINE_PRESENT' || act === 'PRESENT') {
       const compId = payload?.compartmentId || 'A1';
 
       await sql`
@@ -95,7 +111,7 @@ export default async function handler(
         VALUES ('MEDICINE_PRESENT', 'IR Sensor', 'Medicine container detected in compartment ' || ${compId}, 'INFO', ${'Compartment ' + compId})
       `;
     }
-    else if (action === 'MEDICINE_ABSENT') {
+    else if (act === 'MEDICINE_ABSENT' || act === 'ABSENT') {
       const compId = payload?.compartmentId || 'A1';
 
       await sql`
