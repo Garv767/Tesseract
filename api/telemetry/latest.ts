@@ -52,7 +52,7 @@ export default async function handler(
     const diffSeconds = item.created_at 
       ? Math.max(0, Math.floor((Date.now() - new Date(item.created_at).getTime()) / 1000))
       : 999999;
-    const isOnline = diffSeconds <= 40;
+    const isOnline = diffSeconds <= 15;
 
     return response.status(200).json({
       deviceId: item.device_id || 'ESP32-001',

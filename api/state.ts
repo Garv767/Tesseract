@@ -38,11 +38,11 @@ export default async function handler(
     }
 
     // Determine actual hardware connectivity based on telemetry timestamp
-    // ESP32 reports every 10s. If last ping is > 40s ago, device is OFFLINE.
+    // ESP32 reports every 3s. If last ping is > 15s ago, device is OFFLINE.
     const lastSeenTime = telemetry?.created_at ? new Date(telemetry.created_at).getTime() : 0;
     const now = Date.now();
     const diffSeconds = lastSeenTime > 0 ? Math.max(0, Math.floor((now - lastSeenTime) / 1000)) : 999999;
-    const isDeviceOnline = lastSeenTime > 0 && diffSeconds <= 40;
+    const isDeviceOnline = lastSeenTime > 0 && diffSeconds <= 15;
 
     // 2. Fetch compartments
     let compartments: Record<string, any> = {};

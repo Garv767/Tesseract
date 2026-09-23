@@ -1,29 +1,33 @@
 #include <WiFi.h>
-#include <WiFiMulti.h>
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
 #include <WebServer.h>
+#include <DNSServer.h>
+#include <Preferences.h>
 #include <DHT.h>
 
 // =====================================================================
-// SENSOR 1 & 2: DHT11 (Temperature & Humidity) - CURRENTLY ACTIVE
+// SENSOR CONFIGURATION
 // =====================================================================
+
+// ---------------- DHT11 ----------------
 #define DHT_PIN 4
 #define DHT_TYPE DHT11
-
 DHT dht(DHT_PIN, DHT_TYPE);
 
-// =====================================================================
-// PLACEHOLDER: SENSORS PLANNED FOR FUTURE HARDWARE TESTING
-// Set to 1 when you physically wire each sensor.
-// =====================================================================
-#define ENABLE_DOOR_SENSOR   0 // Set to 1 when Reed switch is connected to PIN 18
-#define ENABLE_WEIGHT_SENSOR 0 // Set to 1 when HX711 load cell is connected to DT 32, SCK 33
+// ---------------- MEDICINE IR SENSOR ----------------
+// GPIO 18
+//
+// Sensor polarity configuration:
+// If placing an object/medicine in front of your IR sensor makes the pin read HIGH:
+// set IR_ACTIVE_STATE to HIGH.
+// If your IR sensor outputs LOW on detection: set to LOW.
+#define ENABLE_MEDICINE_IR 1
+#define MEDICINE_IR_PIN 18
+#define IR_ACTIVE_STATE HIGH
 
-#if ENABLE_DOOR_SENSOR
-  #define DOOR_SENSOR_PIN 18 // Reed Switch pin
-#endif
-
+// ---------------- OPTIONAL HX711 ----------------
+#define ENABLE_WEIGHT_SENSOR 0
 #if ENABLE_WEIGHT_SENSOR
   #include "HX711.h"
   #define HX711_DT 32
@@ -33,130 +37,233 @@ DHT dht(DHT_PIN, DHT_TYPE);
 #endif
 
 // =====================================================================
-// WIFI CONFIGURATION (WiFiMulti & Optional WiFiManager)
-// Automatically connects to your home Wi-Fi or phone hotspot
-// =====================================================================
-WiFiMulti wifiMulti;
-
-#define USE_WIFIMANAGER 0
-#if USE_WIFIMANAGER
-  #include <WiFiManager.h>
-#endif
-
-// =====================================================================
-// GLOBAL CLOUD API CONFIGURATION (Vercel Production)
+// CLOUD API
 // =====================================================================
 const char* API_URL = "https://tesseract-med-tracker.vercel.app/api/action";
 
 // =====================================================================
-// LOCAL WEB SERVER (For direct local IP monitoring)
+// ACCESS POINT CONFIGURATION
 // =====================================================================
-WebServer server(80);
+const char* AP_SSID = "Tesseract-Medicine";
+const char* AP_PASS = "12345678";
 
-// Current sensor readings
+IPAddress ap_IP(192, 168, 4, 1);
+IPAddress ap_Gateway(192, 168, 4, 1);
+IPAddress ap_Subnet(255, 255, 255, 0);
+
+// =====================================================================
+// NETWORK OBJECTS
+// =====================================================================
+const byte DNS_PORT = 53;
+DNSServer dnsServer;
+WebServer server(80);
+Preferences preferences;
+
+// =====================================================================
+// WIFI STATE
+// =====================================================================
+bool isAPMode = false;
+String savedSSID = "";
+String savedPassword = "";
+
+// =====================================================================
+// WIFI RECONNECTION CONFIGURATION
+// =====================================================================
+bool wifiReconnecting = false;
+unsigned long wifiDisconnectStart = 0;
+unsigned long lastReconnectAttempt = 0;
+const unsigned long WIFI_RECONNECT_TIMEOUT_MS = 10000;
+const unsigned long WIFI_RECONNECT_INTERVAL_MS = 2000;
+
+// =====================================================================
+// SENSOR VARIABLES
+// =====================================================================
 float temperature = 0.0;
 float humidity = 0.0;
-float currentWeight = 50.0; // Simulated/placeholder weight (50g) until HX711 is attached
-bool doorOpen = false;      // Simulated/placeholder door state (closed) until Reed switch is attached
-float lastWeight = 50.0;
-bool lastDoorState = false;
+float currentWeight = 50.0;
+bool medicinePresent = false;
+bool lastMedicinePresent = false;
 
-// Cloud telemetry sync timers
+// =====================================================================
+// SENSOR & CLOUD TIMERS (PING INTERVAL = 3 SECONDS)
+// =====================================================================
 unsigned long lastSensorRead = 0;
-const unsigned long SENSOR_READ_INTERVAL_MS = 2000;   // Read DHT11 every 2 seconds
+const unsigned long SENSOR_READ_INTERVAL_MS = 2000; // Read DHT11 every 2s
+
 unsigned long lastCloudSync = 0;
-const unsigned long CLOUD_SYNC_INTERVAL_MS = 10000;   // Push to Vercel cloud every 10 seconds
+const unsigned long CLOUD_SYNC_INTERVAL_MS = 3000;  // Telemetry cloud ping every 3s
 
 // =====================================================================
-// LOCAL WEB SERVER HANDLERS
+// CLOUD API DISPATCHER
 // =====================================================================
-void handleRoot() {
+void sendApiAction(String action, String payload) {
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("[Cloud Error] Wi-Fi disconnected. Cannot send data.");
+    return;
+  }
+
+  WiFiClientSecure client;
+  client.setInsecure(); // Skip TLS certificate validation for speed & serverless compatibility
+
+  HTTPClient http;
+  http.setTimeout(5000);
+
+  if (http.begin(client, API_URL)) {
+    http.addHeader("Content-Type", "application/json");
+
+    String requestBody = "{\"action\":\"" + action + "\",\"payload\":" + payload + "}";
+    Serial.print("[Cloud API] POST " + action + "... ");
+
+    int httpResponseCode = http.POST(requestBody);
+
+    if (httpResponseCode > 0) {
+      Serial.print("Code: ");
+      Serial.println(httpResponseCode);
+      if (httpResponseCode == 200) {
+        Serial.println("  Cloud response: " + http.getString());
+      } else {
+        Serial.println("  Cloud warning: " + http.getString());
+      }
+    } else {
+      Serial.print("Error: ");
+      Serial.println(http.errorToString(httpResponseCode));
+    }
+    http.end();
+  } else {
+    Serial.print("[Cloud Error] Unable to connect to host: ");
+    Serial.println(API_URL);
+  }
+}
+
+// =====================================================================
+// CLOUD TELEMETRY
+// =====================================================================
+void pushCloudTelemetry(float temp, float hum, float weight, bool medicine, int battery = 98) {
+  String payload = "{";
+  payload += "\"deviceId\":\"ESP32-001\",";
+  payload += "\"temperature\":" + String(temp, 1) + ",";
+  payload += "\"humidity\":" + String(hum, 1) + ",";
+  payload += "\"weight\":" + String(weight, 1) + ",";
+  payload += "\"medicinePresent\":" + String(medicine ? "true" : "false") + ",";
+  payload += "\"battery\":" + String(battery);
+  payload += "}";
+
+  sendApiAction("REPORT_TELEMETRY", payload);
+}
+
+// =====================================================================
+// CAPTIVE PORTAL - ROOT
+// =====================================================================
+void handlePortalRoot() {
+  int n = WiFi.scanNetworks();
+  String options = "";
+
+  if (n == 0) {
+    options = "<option disabled>No networks found</option>";
+  } else {
+    for (int i = 0; i < n; i++) {
+      String ssidName = WiFi.SSID(i);
+      int rssi = WiFi.RSSI(i);
+      options += "<option value='" + ssidName + "'>" + ssidName + " (" + String(rssi) + " dBm)</option>";
+    }
+  }
+
   String html = R"rawliteral(
 <!DOCTYPE html>
 <html>
 <head>
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Smart Medicine Monitor - Global ESP32</title>
+<title>Tesseract Wi-Fi Setup</title>
 <style>
+* { box-sizing: border-box; }
 body {
-    font-family: Arial, sans-serif;
-    background: #111827;
-    color: white;
-    text-align: center;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: #0f172a;
+    color: #f8fafc;
     margin: 0;
-    padding: 30px;
-}
-h1 { margin-bottom: 10px; }
-.subtitle { color: #9ca3af; margin-bottom: 25px; font-size: 14px; }
-.cloud-link { color: #38bdf8; text-decoration: none; font-weight: bold; }
-.cloud-link:hover { text-decoration: underline; }
-.container { max-width: 700px; margin: auto; }
-.cards {
-    display: flex;
-    gap: 20px;
-    justify-content: center;
-    flex-wrap: wrap;
+    padding: 24px;
 }
 .card {
-    background: #1f2937;
-    border-radius: 15px;
-    padding: 25px;
-    width: 200px;
-    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.3);
+    max-width: 440px;
+    margin: 20px auto;
+    background: #1e293b;
+    border-radius: 16px;
+    padding: 28px;
+    box-shadow: 0 10px 25px rgba(0,0,0,0.4);
 }
-.title { color: #9ca3af; font-size: 16px; }
-.value { font-size: 44px; font-weight: bold; margin-top: 10px; }
-.unit { font-size: 20px; color: #9ca3af; }
-.status {
-    margin-top: 25px;
-    color: #22c55e;
-    font-size: 17px;
+h2 {
+    margin: 0 0 8px 0;
+    font-size: 22px;
+    color: #38bdf8;
+    text-align: center;
 }
-.info { color: #6b7280; font-size: 13px; margin-top: 8px; }
+p {
+    font-size: 14px;
+    color: #94a3b8;
+    text-align: center;
+    margin-bottom: 24px;
+}
+label {
+    display: block;
+    font-size: 13px;
+    font-weight: 600;
+    margin-bottom: 6px;
+    color: #cbd5e1;
+}
+select, input[type="text"], input[type="password"] {
+    width: 100%;
+    padding: 12px 14px;
+    margin-bottom: 18px;
+    background: #0f172a;
+    border: 1px solid #334155;
+    border-radius: 8px;
+    color: white;
+    font-size: 15px;
+}
+button {
+    width: 100%;
+    background: #0284c7;
+    color: white;
+    border: none;
+    padding: 14px;
+    border-radius: 8px;
+    font-size: 16px;
+    font-weight: bold;
+    cursor: pointer;
+}
+.note {
+    font-size: 12px;
+    color: #64748b;
+    text-align: center;
+    margin-top: 16px;
+}
 </style>
 </head>
 <body>
-<div class="container">
-<h1>🌡️ Smart Medicine Monitor</h1>
-<p class="subtitle">Local Node | Syncing with <a class="cloud-link" href="https://tesseract-med-tracker.vercel.app" target="_blank">Tesseract Cloud</a></p>
-
-<div class="cards">
-  <div class="card">
-    <div class="title">Temperature</div>
-    <div class="value"><span id="temperature">--</span><span class="unit">°C</span></div>
-  </div>
-  <div class="card">
-    <div class="title">Humidity</div>
-    <div class="value"><span id="humidity">--</span><span class="unit">%</span></div>
-  </div>
-  <div class="card">
-    <div class="title">Weight (Planned)</div>
-    <div class="value"><span id="weight">50.0</span><span class="unit">g</span></div>
-  </div>
+<div class="card">
+<h2>💊 Tesseract IoT Setup</h2>
+<p>Select your Wi-Fi network to connect the ESP32 to the global cloud dashboard.</p>
+<form action="/save" method="POST">
+<label>Available Wi-Fi Networks:</label>
+<select name="ssid" id="ssid" onchange="checkCustom(this)">
+)rawliteral" + options + R"rawliteral(
+<option value="__custom__">+ Enter Hidden / Other Network</option>
+</select>
+<div id="customDiv" style="display:none;">
+<label>Network Name (SSID):</label>
+<input type="text" name="custom_ssid" id="custom_ssid" placeholder="Enter Wi-Fi name">
 </div>
-
-<div class="status">🟢 ESP32 ONLINE &amp; CLOUD CONNECTED</div>
-<p id="update" class="info">Waiting for sensor...</p>
+<label>Wi-Fi Password:</label>
+<input type="password" name="password" placeholder="Enter password">
+<button type="submit">Connect to Wi-Fi</button>
+</form>
+<div class="note">Device will reboot and connect automatically.</div>
 </div>
-
 <script>
-function updateSensorData() {
-    fetch("/data")
-    .then(response => response.json())
-    .then(data => {
-        document.getElementById("temperature").innerText = data.temperature.toFixed(1);
-        document.getElementById("humidity").innerText = data.humidity.toFixed(1);
-        if (data.weight !== undefined) {
-            document.getElementById("weight").innerText = data.weight.toFixed(1);
-        }
-        document.getElementById("update").innerText = "Last update: " + new Date().toLocaleTimeString();
-    })
-    .catch(error => {
-        document.getElementById("update").innerText = "Local read error";
-    });
+function checkCustom(select) {
+    var customDiv = document.getElementById("customDiv");
+    customDiv.style.display = (select.value === "__custom__") ? "block" : "none";
 }
-setInterval(updateSensorData, 2000);
-updateSensorData();
 </script>
 </body>
 </html>
@@ -165,112 +272,262 @@ updateSensorData();
   server.send(200, "text/html", html);
 }
 
+// =====================================================================
+// SAVE WIFI
+// =====================================================================
+void handleSaveWifi() {
+  String selectedSSID = server.arg("ssid");
+  if (selectedSSID == "__custom__") {
+    selectedSSID = server.arg("custom_ssid");
+  }
+  String enteredPass = server.arg("password");
+
+  if (selectedSSID.length() == 0) {
+    server.send(400, "text/html", "<h3>Error: Wi-Fi Name cannot be empty.<br><br><a href='/'>Go back</a></h3>");
+    return;
+  }
+
+  preferences.begin("tesseract", false);
+  preferences.putString("ssid", selectedSSID);
+  preferences.putString("password", enteredPass);
+  preferences.end();
+
+  String html =
+      "<html><head><meta name='viewport' content='width=device-width,initial-scale=1'></head>"
+      "<body style='background:#0f172a;color:white;font-family:Arial;text-align:center;padding:40px;'>"
+      "<h2 style='color:#22c55e'>Credentials Saved!</h2>"
+      "<p>Connecting to <b>" + selectedSSID + "</b>...</p>"
+      "<p>ESP32 will restart.</p>"
+      "</body></html>";
+
+  server.send(200, "text/html", html);
+  delay(2000);
+  ESP.restart();
+}
+
+// =====================================================================
+// ONLINE DASHBOARD
+// =====================================================================
+void handleOnlineRoot() {
+  String html = R"rawliteral(
+<!DOCTYPE html>
+<html>
+<head>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tesseract Smart Medicine Monitor</title>
+<style>
+* { box-sizing: border-box; }
+body {
+    font-family: Arial, sans-serif;
+    background: #0f172a;
+    color: white;
+    text-align: center;
+    margin: 0;
+    padding: 24px;
+}
+.container { max-width: 650px; margin: auto; }
+h1 { color: #38bdf8; margin-bottom: 6px; }
+.cloud-bar {
+    background: #1e293b;
+    padding: 10px 16px;
+    border-radius: 8px;
+    margin-bottom: 20px;
+    font-size: 13px;
+    color: #94a3b8;
+}
+.cloud-bar a { color: #38bdf8; font-weight: bold; text-decoration: none; }
+.grid { display: flex; gap: 14px; justify-content: center; flex-wrap: wrap; margin-bottom: 20px; }
+.card {
+    background: #1e293b;
+    padding: 20px;
+    border-radius: 12px;
+    width: 180px;
+    border: 1px solid #334155;
+}
+.card-title { font-size: 12px; color: #94a3b8; font-weight: bold; text-transform: uppercase; margin-bottom: 8px; }
+.card-val { font-size: 28px; font-weight: bold; color: #f8fafc; }
+.card-unit { font-size: 14px; color: #64748b; margin-left: 2px; }
+.medicine-card { width: 100%; max-width: 480px; background: #1e293b; border-radius: 12px; padding: 22px; margin: 0 auto 20px auto; border: 1px solid #334155; }
+.medicine-status { font-size: 20px; font-weight: bold; padding: 10px; border-radius: 8px; margin-top: 8px; }
+.medicine-status.present { background: rgba(34,197,94,0.15); color: #4ade80; border: 1px solid #22c55e; }
+.medicine-status.absent { background: rgba(239,68,68,0.15); color: #f87171; border: 1px solid #ef4444; }
+.reset-btn {
+    background: #334155;
+    color: #cbd5e1;
+    border: none;
+    padding: 10px 16px;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 13px;
+    margin-top: 10px;
+}
+.reset-btn:hover { background: #475569; }
+</style>
+</head>
+<body>
+<div class="container">
+<h1>💊 Tesseract</h1>
+<div class="cloud-bar">
+Live IoT Cloud: <a href="https://tesseract-med-tracker.vercel.app" target="_blank">Open Global Web Dashboard &rarr;</a>
+</div>
+<div class="grid">
+    <div class="card">
+        <div class="card-title">Temperature</div>
+        <div class="card-val"><span id="temperature">--</span><span class="card-unit">&deg;C</span></div>
+    </div>
+    <div class="card">
+        <div class="card-title">Humidity</div>
+        <div class="card-val"><span id="humidity">--</span><span class="card-unit">%</span></div>
+    </div>
+</div>
+<div class="medicine-card">
+    <div class="card-title">Medicine Presence (IR Sensor GPIO 18)</div>
+    <div id="medicine" class="medicine-status absent">Checking...</div>
+</div>
+<div style="font-size: 12px; color: #64748b;" id="update">Connecting...</div>
+<form action="/reset-wifi" method="POST" onsubmit="return confirm('Clear Wi-Fi credentials and restart AP setup?');">
+    <button type="submit" class="reset-btn">Reset Wi-Fi Settings</button>
+</form>
+</div>
+<script>
+function updateData() {
+    fetch("/data")
+    .then(r => r.json())
+    .then(data => {
+        document.getElementById("temperature").innerText = Number(data.temperature).toFixed(1);
+        document.getElementById("humidity").innerText = Number(data.humidity).toFixed(1);
+        var med = document.getElementById("medicine");
+        if (data.medicinePresent) {
+            med.innerText = "🟢 MEDICINE PRESENT";
+            med.className = "medicine-status present";
+        } else {
+            med.innerText = "🔴 MEDICINE ABSENT";
+            med.className = "medicine-status absent";
+        }
+        document.getElementById("update").innerText = "Last update: " + new Date().toLocaleTimeString();
+    })
+    .catch(() => {
+        document.getElementById("update").innerText = "Device offline or busy";
+    });
+}
+setInterval(updateData, 2000);
+updateData();
+</script>
+</body>
+</html>
+)rawliteral";
+
+  server.send(200, "text/html", html);
+}
+
+// =====================================================================
+// SENSOR DATA API
+// =====================================================================
 void handleData() {
   String json = "{";
   json += "\"temperature\":" + String(temperature, 1) + ",";
   json += "\"humidity\":" + String(humidity, 1) + ",";
   json += "\"weight\":" + String(currentWeight, 1) + ",";
-  json += "\"doorOpen\":" + String(doorOpen ? "true" : "false");
+  json += "\"medicinePresent\":" + String(medicinePresent ? "true" : "false");
   json += "}";
 
   server.send(200, "application/json", json);
 }
 
 // =====================================================================
-// GLOBAL HTTPS API DISPATCHER (Sends to Vercel Cloud)
+// RESET WIFI
 // =====================================================================
-void sendApiAction(String action, String payload) {
-  if (WiFi.status() != WL_CONNECTED) {
-#if !USE_WIFIMANAGER
-    wifiMulti.run();
-#endif
-    if (WiFi.status() != WL_CONNECTED) {
-      Serial.println("[Cloud Error] Wi-Fi not connected. Cannot reach Vercel.");
-      return;
-    }
-  }
+void handleResetWifi() {
+  preferences.begin("tesseract", false);
+  preferences.clear();
+  preferences.end();
 
-  WiFiClientSecure client;
-  client.setInsecure(); // Connect to HTTPS without requiring hardcoded CA certificates
-
-  HTTPClient http;
-  http.setTimeout(8000); // 8 second timeout
-
-  if (http.begin(client, API_URL)) {
-    http.addHeader("Content-Type", "application/json");
-
-    String requestBody = "{\"action\":\"" + action + "\", \"payload\":" + payload + "}";
-    Serial.print("[Cloud API] POST " + action + "... ");
-
-    int httpResponseCode = http.POST(requestBody);
-
-    if (httpResponseCode > 0) {
-      Serial.println("Code: " + String(httpResponseCode));
-      if (httpResponseCode == 200) {
-        Serial.println("  Cloud response: " + http.getString());
-      } else {
-        Serial.println("  Cloud warning: " + http.getString());
-      }
-    } else {
-      Serial.println("Error: " + http.errorToString(httpResponseCode));
-    }
-    http.end();
-  } else {
-    Serial.println("[Cloud Error] Unable to connect to " + String(API_URL));
-  }
-}
-
-// Push complete telemetry snapshot to the cloud
-void pushCloudTelemetry(float temp, float hum, float weight, bool door, int battery = 98) {
-  String payload = "{";
-  payload += "\"temperature\":" + String(temp, 1) + ",";
-  payload += "\"humidity\":" + String(hum, 1) + ",";
-  payload += "\"weight\":" + String(weight, 1) + ",";
-  payload += "\"doorOpen\":" + String(door ? "true" : "false") + ",";
-  payload += "\"battery\":" + String(battery);
-  payload += "}";
-
-  sendApiAction("REPORT_TELEMETRY", payload);
+  server.send(200, "text/html", "<h3>Wi-Fi credentials erased.<br>Restarting into AP mode...</h3>");
+  delay(2000);
+  ESP.restart();
 }
 
 // =====================================================================
-// WIFI INITIALIZATION
+// START ACCESS POINT MODE
 // =====================================================================
-void setupWiFi() {
-#if USE_WIFIMANAGER
-  Serial.println("\n[WiFi] Starting WiFiManager captive portal...");
-  WiFiManager wm;
-  bool res = wm.autoConnect("Tesseract-Setup", "12345678");
-  if (!res) {
-    Serial.println("[WiFi] Portal timeout. Restarting...");
-    ESP.restart();
+void startAccessPointMode() {
+  isAPMode = true;
+  server.stop();
+  delay(100);
+
+  WiFi.disconnect(false);
+  delay(300);
+  WiFi.mode(WIFI_AP);
+
+  WiFi.softAPConfig(ap_IP, ap_Gateway, ap_Subnet);
+  bool apStarted = WiFi.softAP(AP_SSID, AP_PASS);
+
+  if (!apStarted) {
+    Serial.println("[AP ERROR] Failed to start Access Point!");
+    return;
   }
-#else
+
+  Serial.println("\n==================================================");
+  Serial.println("   [AP MODE] Tesseract Access Point Started");
+  Serial.println("==================================================");
+  Serial.print("SSID: "); Serial.println(AP_SSID);
+  Serial.print("Password: "); Serial.println(AP_PASS);
+  Serial.print("AP IP Address: "); Serial.println(WiFi.softAPIP());
+  Serial.println("Connect phone to: Tesseract-Medicine");
+  Serial.println("Open browser to: http://192.168.4.1");
+  Serial.println("==================================================");
+
+  dnsServer.stop();
+  dnsServer.start(DNS_PORT, "*", WiFi.softAPIP());
+
+  server.on("/", handlePortalRoot);
+  server.on("/save", HTTP_POST, handleSaveWifi);
+  server.on("/generate_204", handlePortalRoot); // Android captive portal
+  server.on("/hotspot-detect.html", handlePortalRoot); // iOS captive portal
+  server.on("/canonical.html", handlePortalRoot);
+  server.on("/ncsi.txt", handlePortalRoot); // Windows
+  server.onNotFound(handlePortalRoot);
+
+  server.begin();
+  Serial.println("[Web Server] Captive portal running on port 80");
+}
+
+// =====================================================================
+// CONNECT TO SAVED WIFI
+// =====================================================================
+bool connectToSavedWifi() {
+  preferences.begin("tesseract", true);
+  savedSSID = preferences.getString("ssid", "");
+  savedPassword = preferences.getString("password", "");
+  preferences.end();
+
+  if (savedSSID.length() == 0) {
+    Serial.println("\n[WiFi] No saved credentials.");
+    return false;
+  }
+
   WiFi.mode(WIFI_STA);
-  Serial.println("\n[WiFi] Initializing multi-network auto-connect...");
+  WiFi.begin(savedSSID.c_str(), savedPassword.c_str());
 
-  // Enter your home/lab Wi-Fi and phone hotspot credentials here:
-  wifiMulti.addAP("YOUR_WIFI_NAME", "YOUR_WIFI_PASSWORD");
-  wifiMulti.addAP("YOUR_PHONE_HOTSPOT", "HOTSPOT_PASSWORD");
+  Serial.print("[WiFi] Connecting to ");
+  Serial.println(savedSSID);
 
-  Serial.print("[WiFi] Connecting");
-  int attempts = 0;
-  while (wifiMulti.run() != WL_CONNECTED && attempts < 30) {
+  unsigned long startTime = millis();
+  while (WiFi.status() != WL_CONNECTED && millis() - startTime < 15000) {
     delay(500);
     Serial.print(".");
-    attempts++;
   }
 
   if (WiFi.status() == WL_CONNECTED) {
-    Serial.println("\n[WiFi] Connected!");
-    Serial.print("[WiFi] Local IP: ");
+    Serial.println("\n[WiFi] Connected successfully!");
+    Serial.print("[WiFi] IP Address: ");
     Serial.println(WiFi.localIP());
-    Serial.print("[WiFi] Connected to SSID: ");
-    Serial.println(WiFi.SSID());
-  } else {
-    Serial.println("\n[WiFi] Warning: Still searching for Wi-Fi. Will retry in loop.");
+    return true;
   }
-#endif
+
+  Serial.println("\n[WiFi] Failed to connect.");
+  WiFi.disconnect(false);
+  return false;
 }
 
 // =====================================================================
@@ -282,143 +539,195 @@ void setup() {
 
   Serial.println();
   Serial.println("==================================================");
-  Serial.println("   TESSERACT SMART MEDICINE MONITOR (GLOBAL IoT)  ");
+  Serial.println("     TESSERACT SMART MEDICINE MONITOR (IoT)       ");
   Serial.println("==================================================");
 
-  // 1. Initialize Active Sensors (DHT11 on Pin 4)
+  // 1. Initialize DHT11
   dht.begin();
   Serial.println("[Sensors] DHT11 initialized on GPIO 4");
 
-  // 2. Initialize Planned Sensors (Placeholder Logic)
-#if ENABLE_DOOR_SENSOR
-  pinMode(DOOR_SENSOR_PIN, INPUT_PULLUP);
-  doorOpen = (digitalRead(DOOR_SENSOR_PIN) == HIGH);
-  lastDoorState = doorOpen;
-  Serial.println("[Sensors] Reed switch active on GPIO 18");
-#else
-  Serial.println("[Sensors] Door Reed Switch: DISABLED (Placeholder mode)");
+  // 2. Initialize Medicine IR Sensor
+#if ENABLE_MEDICINE_IR
+  pinMode(MEDICINE_IR_PIN, INPUT);
+  int initialRaw = digitalRead(MEDICINE_IR_PIN);
+  medicinePresent = (initialRaw == IR_ACTIVE_STATE);
+  lastMedicinePresent = medicinePresent;
+
+  Serial.print("[Sensors] Medicine IR sensor active on GPIO 18 (Active Polarity: ");
+  Serial.print(IR_ACTIVE_STATE == HIGH ? "HIGH" : "LOW");
+  Serial.print(" | Current Raw: ");
+  Serial.print(initialRaw);
+  Serial.print(" -> State: ");
+  Serial.println(medicinePresent ? "PRESENT" : "ABSENT");
 #endif
 
+  // 3. Optional Weight Sensor (HX711)
 #if ENABLE_WEIGHT_SENSOR
   scale.begin(HX711_DT, HX711_SCK);
   scale.set_scale(2280.f);
   scale.tare();
   if (scale.is_ready()) {
     currentWeight = scale.get_units(5);
-    lastWeight = currentWeight;
   }
-  Serial.println("[Sensors] HX711 load cell active on GPIO 32/33");
+  Serial.println("[Sensors] HX711 active on GPIO 32/33");
 #else
-  Serial.println("[Sensors] HX711 Load Cell: DISABLED (Placeholder mode - 50.0g default)");
+  Serial.println("[Sensors] HX711 disabled");
 #endif
 
-  // 3. Connect to Wi-Fi
-  setupWiFi();
+  // 4. Connect to Wi-Fi or start AP
+  if (!connectToSavedWifi()) {
+    startAccessPointMode();
+  } else {
+    server.on("/", handleOnlineRoot);
+    server.on("/data", handleData);
+    server.on("/reset-wifi", HTTP_POST, handleResetWifi);
+    server.begin();
+    Serial.println("[Web Server] Local dashboard started.");
 
-  // 4. Start Local Web Server
-  server.on("/", handleRoot);
-  server.on("/data", handleData);
-  server.begin();
-  Serial.println("[Web Server] Local monitor started on port 80");
+    // Initial DHT reading
+    float initT = dht.readTemperature();
+    float initH = dht.readHumidity();
+    if (!isnan(initT) && !isnan(initH)) {
+      temperature = initT;
+      humidity = initH;
+    }
 
-  // 5. Initial Boot Telemetry Push
-  float initTemp = dht.readTemperature();
-  float initHum = dht.readHumidity();
-  if (!isnan(initTemp) && !isnan(initHum)) {
-    temperature = initTemp;
-    humidity = initHum;
+    // Initial cloud telemetry push
+    pushCloudTelemetry(temperature, humidity, currentWeight, medicinePresent, 100);
   }
-  pushCloudTelemetry(temperature, humidity, currentWeight, doorOpen, 100);
 }
 
 // =====================================================================
 // MAIN LOOP
 // =====================================================================
 void loop() {
-  // Handle local web page client requests
+  // -------------------------------------------------------------------
+  // AP MODE
+  // -------------------------------------------------------------------
+  if (isAPMode) {
+    dnsServer.processNextRequest();
+    server.handleClient();
+
+    unsigned long currentMillis = millis();
+
+    // Check IR sensor even in AP mode
+#if ENABLE_MEDICINE_IR
+    int rawIr = digitalRead(MEDICINE_IR_PIN);
+    bool currentMedicinePresent = (rawIr == IR_ACTIVE_STATE);
+    if (currentMedicinePresent != lastMedicinePresent) {
+      delay(40); // Debounce
+      if ((digitalRead(MEDICINE_IR_PIN) == IR_ACTIVE_STATE) == currentMedicinePresent) {
+        medicinePresent = currentMedicinePresent;
+        Serial.printf("[Medicine IR] Raw Pin 18: %d -> MEDICINE %s\n", rawIr, medicinePresent ? "PRESENT" : "ABSENT");
+        lastMedicinePresent = medicinePresent;
+      }
+    }
+#endif
+
+    // Read DHT11
+    if (currentMillis - lastSensorRead >= SENSOR_READ_INTERVAL_MS) {
+      float newT = dht.readTemperature();
+      float newH = dht.readHumidity();
+      if (!isnan(newT) && !isnan(newH)) {
+        temperature = newT;
+        humidity = newH;
+      }
+      lastSensorRead = currentMillis;
+    }
+
+    delay(5);
+    return;
+  }
+
+  // -------------------------------------------------------------------
+  // ONLINE MODE
+  // -------------------------------------------------------------------
   server.handleClient();
 
-  // Ensure Wi-Fi auto-reconnects if disconnected
-#if !USE_WIFIMANAGER
+  // Wi-Fi Connection Loss Handling
   if (WiFi.status() != WL_CONNECTED) {
-    wifiMulti.run();
+    if (!wifiReconnecting) {
+      wifiReconnecting = true;
+      wifiDisconnectStart = millis();
+      lastReconnectAttempt = 0;
+      Serial.println("\n[WiFi] Connection lost. Attempting reconnection...");
+      WiFi.reconnect();
+    }
+
+    unsigned long disconnectedFor = millis() - wifiDisconnectStart;
+    if (disconnectedFor < WIFI_RECONNECT_TIMEOUT_MS) {
+      if (millis() - lastReconnectAttempt >= WIFI_RECONNECT_INTERVAL_MS) {
+        lastReconnectAttempt = millis();
+        Serial.printf("[WiFi] Reconnecting... %lu seconds\n", disconnectedFor / 1000);
+        WiFi.reconnect();
+      }
+      delay(10);
+      return;
+    }
+
+    Serial.println("\n[WiFi] Reconnection timeout. Switching to AP mode...");
+    wifiReconnecting = false;
+    startAccessPointMode();
+    return;
   }
-#endif
+
+  if (wifiReconnecting) {
+    wifiReconnecting = false;
+    Serial.println("\n[WiFi] Connection restored! IP: " + WiFi.localIP().toString());
+  }
 
   unsigned long currentMillis = millis();
 
-  // -------------------------------------------------------------------
-  // 1. Read DHT11 (Every 2 Seconds, Non-blocking)
-  // -------------------------------------------------------------------
+  // 1. Read DHT11 every 2 seconds
   if (currentMillis - lastSensorRead >= SENSOR_READ_INTERVAL_MS) {
-    float newTemperature = dht.readTemperature();
-    float newHumidity = dht.readHumidity();
-
-    if (!isnan(newTemperature) && !isnan(newHumidity)) {
-      temperature = newTemperature;
-      humidity = newHumidity;
-
-      Serial.print("[DHT11] Temp: ");
-      Serial.print(temperature, 1);
-      Serial.print(" °C | Humidity: ");
-      Serial.print(humidity, 1);
-      Serial.println(" %");
+    float newT = dht.readTemperature();
+    float newH = dht.readHumidity();
+    if (!isnan(newT) && !isnan(newH)) {
+      temperature = newT;
+      humidity = newH;
+      Serial.printf("[DHT11] Temp: %.1f °C | Humidity: %.1f %%\n", temperature, humidity);
     } else {
       Serial.println("[DHT11] Warning: Read failed");
     }
-
     lastSensorRead = currentMillis;
   }
 
-  // -------------------------------------------------------------------
-  // 2. Door Sensor Check (Placeholder - Active if ENABLE_DOOR_SENSOR = 1)
-  // -------------------------------------------------------------------
-#if ENABLE_DOOR_SENSOR
-  bool currentDoorState = (digitalRead(DOOR_SENSOR_PIN) == HIGH);
-  if (currentDoorState != lastDoorState) {
-    doorOpen = currentDoorState;
-    if (doorOpen) {
-      Serial.println("[Event] Door Opened!");
-      sendApiAction("OPEN_DOOR", "{}");
-    } else {
-      Serial.println("[Event] Door Closed.");
-      sendApiAction("CLOSE_DOOR", "{}");
+  // 2. Read Medicine IR Sensor with Debounce
+#if ENABLE_MEDICINE_IR
+  int rawIr = digitalRead(MEDICINE_IR_PIN);
+  bool currentMedicinePresent = (rawIr == IR_ACTIVE_STATE);
+
+  if (currentMedicinePresent != lastMedicinePresent) {
+    delay(40); // 40ms debounce to filter transient optical jitter
+    if ((digitalRead(MEDICINE_IR_PIN) == IR_ACTIVE_STATE) == currentMedicinePresent) {
+      medicinePresent = currentMedicinePresent;
+      Serial.printf("\n[Medicine IR] Raw Pin 18: %d -> MEDICINE %s\n", rawIr, medicinePresent ? "PRESENT" : "ABSENT");
+
+      if (medicinePresent) {
+        sendApiAction("MEDICINE_PRESENT", "{\"deviceId\":\"ESP32-001\",\"compartmentId\":\"A1\"}");
+      } else {
+        sendApiAction("MEDICINE_ABSENT", "{\"deviceId\":\"ESP32-001\",\"compartmentId\":\"A1\"}");
+      }
+      lastMedicinePresent = medicinePresent;
     }
-    lastDoorState = currentDoorState;
   }
 #endif
 
-  // -------------------------------------------------------------------
-  // 3. Weight Sensor Check (Placeholder - Active if ENABLE_WEIGHT_SENSOR = 1)
-  // -------------------------------------------------------------------
+  // 3. Optional Weight Sensor (HX711)
 #if ENABLE_WEIGHT_SENSOR
   if (scale.is_ready()) {
-    float readWeight = scale.get_units(3);
-    currentWeight = readWeight;
-
-    if (lastWeight > medicineThreshold && currentWeight <= medicineThreshold) {
-      Serial.println("[Event] Medicine Removed!");
-      sendApiAction("REMOVE_MEDICINE", "{\"compartmentId\":\"A1\"}");
-    } else if (lastWeight <= medicineThreshold && currentWeight > medicineThreshold) {
-      Serial.println("[Event] Medicine Restored.");
-      sendApiAction("RESTORE_MEDICINE", "{\"compartmentId\":\"A1\"}");
-    }
-    lastWeight = currentWeight;
+    currentWeight = scale.get_units(3);
   }
 #endif
 
-  // -------------------------------------------------------------------
-  // 4. Global Cloud Telemetry Push (Every 10 Seconds)
-  // Sends live readings to https://tesseract-med-tracker.vercel.app/api/action
-  // -------------------------------------------------------------------
+  // 4. Cloud Telemetry Push every 3 seconds (Ping interval = 3s)
   if (currentMillis - lastCloudSync >= CLOUD_SYNC_INTERVAL_MS) {
     if (temperature > 0.0 || humidity > 0.0) {
-      Serial.println("[Cloud] Pushing live telemetry to global Vercel API...");
-      pushCloudTelemetry(temperature, humidity, currentWeight, doorOpen, 98);
+      Serial.println("\n[Cloud] Pushing live telemetry (3s interval)...");
+      pushCloudTelemetry(temperature, humidity, currentWeight, medicinePresent, 98);
     }
     lastCloudSync = currentMillis;
   }
 
-  // Small delay for watchdog / CPU yield
   delay(10);
 }
