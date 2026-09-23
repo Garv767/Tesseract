@@ -5,57 +5,137 @@ export default async function handler(
   request: VercelRequest,
   response: VercelResponse,
 ) {
+  // CORS & Preflight handling
+  response.setHeader('Access-Control-Allow-Origin', '*');
+  response.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+  response.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+
+  if (request.method === 'OPTIONS') {
+    return response.status(200).end();
+  }
+
   try {
-    if (!process.env.DATABASE_URL) {
+    const rawDbUrl = process.env.DATABASE_URL || '';
+    const dbUrl = rawDbUrl.replace(/^["']|["']$/g, '').trim();
+
+    if (!dbUrl) {
       return response.status(500).json({
         error: 'DATABASE_URL environment variable is missing on Vercel. Please add DATABASE_URL to your Vercel Project Settings > Environment Variables and redeploy.'
       });
     }
 
-    const sql = neon(process.env.DATABASE_URL);
+    const sql = neon(dbUrl);
     
-    // Fetch latest telemetry
-    const telemetryQuery = await sql\`SELECT * FROM telemetry_history ORDER BY id DESC LIMIT 1\`;
-    const telemetry = telemetryQuery[0] || {
-      temperature: 24.0, humidity: 48.0, weight: 52.4, battery: 87, door_open: false
-    };
+    // 1. Fetch latest telemetry
+    let telemetry: any = null;
+    try {
+      const telemetryQuery = await sql`SELECT * FROM telemetry_history ORDER BY id DESC LIMIT 1`;
+      if (telemetryQuery && telemetryQuery.length > 0) {
+        telemetry = telemetryQuery[0];
+      }
+    } catch (e) {
+      console.warn('Could not read telemetry_history:', e);
+    }
 
-    // Fetch compartments
-    const medications = await sql\`SELECT * FROM medications\`;
-    const compartments: Record<string, any> = {};
-    medications.forEach((med: any) => {
-      compartments[med.compartment_id] = {
-        medicineName: med.name,
-        present: telemetry.weight > 0, // Simplified presence check for MVP
-        weight: med.expected_weight
-      };
-    });
+    // Determine actual hardware connectivity based on telemetry timestamp
+    // ESP32 reports every 3s. If last ping is > 15s ago, device is OFFLINE.
+    const lastSeenTime = telemetry?.created_at ? new Date(telemetry.created_at).getTime() : 0;
+    const now = Date.now();
+    const diffSeconds = lastSeenTime > 0 ? Math.max(0, Math.floor((now - lastSeenTime) / 1000)) : 999999;
+    const isDeviceOnline = lastSeenTime > 0 && diffSeconds <= 15;
 
-    // Fetch dose history
-    const history = await sql\`SELECT * FROM dose_history ORDER BY id DESC LIMIT 20\`;
+    // 2. Fetch compartments
+    let compartments: Record<string, any> = {};
+    let medications: any[] = [];
+    try {
+      medications = await sql`SELECT * FROM medications`;
+      medications.forEach((med: any) => {
+        compartments[med.compartment_id] = {
+          medicineName: med.name,
+          present: telemetry ? Boolean(telemetry.medicine_present) : false,
+          weight: med.expected_weight
+        };
+      });
+    } catch (e) {
+      console.warn('Could not read medications:', e);
+    }
 
-    // Fetch system events
-    const events = await sql\`SELECT * FROM system_events ORDER BY id DESC LIMIT 20\`;
+    // 3. Fetch dose history
+    let history: any[] = [];
+    try {
+      history = await sql`SELECT * FROM dose_history ORDER BY id DESC LIMIT 20`;
+    } catch (e) {
+      console.warn('Could not read dose_history:', e);
+    }
+
+    // 4. Fetch system events & medicine events
+    let events: any[] = [];
+    try {
+      events = await sql`SELECT * FROM system_events ORDER BY id DESC LIMIT 20`;
+    } catch (e) {
+      console.warn('Could not read system_events:', e);
+    }
+
+    let medicineEvents: any[] = [];
+    try {
+      medicineEvents = await sql`SELECT * FROM medicine_events ORDER BY id DESC LIMIT 20`;
+    } catch (e) {
+      console.warn('Could not read medicine_events:', e);
+    }
+
+    // 5. Fetch recent telemetry points for chart hydration
+    let recentTelemetry: any[] = [];
+    try {
+      recentTelemetry = await sql`
+        SELECT temperature, humidity, weight, medicine_present, created_at 
+        FROM telemetry_history 
+        ORDER BY id DESC LIMIT 30
+      `;
+    } catch (e) {
+      console.warn('Could not read recent telemetry:', e);
+    }
+
+    const tempVal = telemetry ? Number(telemetry.temperature ?? 0) : 0;
+    const humVal = telemetry ? Number(telemetry.humidity ?? 0) : 0;
+    const weightVal = telemetry ? Number(telemetry.weight ?? 0) : 0;
+    // Determine medicine presence: check latest medicine_event ('PRESENT' vs 'ABSENT') or telemetry_history boolean
+    let isMedicinePresent = false;
+    if (medicineEvents.length > 0) {
+      const latestEvt = String(medicineEvents[0].event || '').trim().toUpperCase();
+      isMedicinePresent = latestEvt === 'PRESENT';
+    } else if (telemetry?.medicine_present !== undefined && telemetry?.medicine_present !== null) {
+      isMedicinePresent = Boolean(telemetry.medicine_present);
+    }
+    const deviceId = telemetry?.device_id || 'ESP32-001';
 
     return response.status(200).json({
-      deviceId: 'MED-ESP32-001',
-      temperature: Number(telemetry.temperature),
-      humidity: Number(telemetry.humidity),
-      weight: Number(telemetry.weight),
-      battery: telemetry.battery,
-      doorOpen: telemetry.door_open,
-      wifiConnected: true,
-      rtcSynchronized: true,
-      sensorsOnline: true,
-      medicinePresent: telemetry.weight > 0,
+      deviceId,
+      temperature: tempVal,
+      humidity: humVal,
+      weight: weightVal,
+      battery: telemetry ? Number(telemetry.battery ?? 0) : 0,
+      doorOpen: Boolean(telemetry?.door_open),
+      wifiConnected: isDeviceOnline,
+      rtcSynchronized: isDeviceOnline,
+      sensorsOnline: isDeviceOnline,
+      isDeviceOnline,
+      lastSeenSecondsAgo: diffSeconds,
+      lastSeenAt: telemetry?.created_at || null,
+      medicinePresent: isMedicinePresent,
+      medicineStatus: isMedicinePresent ? 'PRESENT' : 'ABSENT',
       currentSimulationTime: new Date().toISOString(),
       compartments,
       medicationSchedule: medications,
       doseHistory: history,
-      events
+      events,
+      medicineEvents,
+      recentTelemetry: recentTelemetry.reverse()
     });
   } catch (error: any) {
     console.error('Error fetching state:', error);
-    return response.status(500).json({ error: error.message });
+    return response.status(500).json({ 
+      error: error?.message || 'Database connection error',
+      details: String(error)
+    });
   }
 }
