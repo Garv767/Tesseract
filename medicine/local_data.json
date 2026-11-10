@@ -1,0 +1,30 @@
+{
+  "patients": {
+    "0": {
+      "id": "local-patient-1",
+      "name": "Patient One"
+    }
+  },
+  "medication_plans": {
+    "local-patient-1": [
+      {
+        "chamber_id": 1,
+        "morning_timing": "Before",
+        "afternoon_timing": "",
+        "evening_timing": ""
+      },
+      {
+        "chamber_id": 2,
+        "morning_timing": "After",
+        "afternoon_timing": "Before",
+        "evening_timing": ""
+      },
+      {
+        "chamber_id": 3,
+        "morning_timing": "",
+        "afternoon_timing": "After",
+        "evening_timing": "Before"
+      }
+    ]
+  }
+}

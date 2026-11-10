@@ -1,0 +1,6 @@
+supabase==2.0.0
+pyfingerprint==0.0.3
+hx711==1.2.5
+gpiozero==2.0.1
+Adafruit-DHT==1.2.3
+python-dotenv==1.0.0
