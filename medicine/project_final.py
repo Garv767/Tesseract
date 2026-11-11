@@ -1,23 +1,12 @@
 from pyfingerprint.pyfingerprint import PyFingerprint
 import RPi.GPIO as GPIO
-import os
 import time
 import threading
-from supabase import create_client, Client
-from datetime import datetime
+from datetime import datetime, timezone
+import db
 
-try:
-    from dotenv import load_dotenv
-    load_dotenv()
-except ImportError:
-    pass
-
-# ====================== SUPABASE CONFIG ======================
-SUPABASE_URL = os.getenv("SUPABASE_URL", "")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY", "")
-if not SUPABASE_URL or not SUPABASE_KEY:
-    raise RuntimeError("Missing SUPABASE_URL or SUPABASE_KEY environment variable")
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+# ====================== NEON POSTGRES CONFIG ======================
+db.check_connection()
 
 # ====================== GPIO PINS ======================
 TRIG = 23
@@ -65,66 +54,52 @@ current_patient_id     = None
 current_patient_name   = None
 current_fingerprint_id = None
 
-# ====================== SUPABASE HELPERS ======================
-def _supabase_insert(payload):
-    try:
-        supabase.table("medicine_logs").insert(payload).execute()
-    except Exception as e:
-        print(f"⚠️  Supabase log error: {e}")
-
-def _supabase_update(payload):
-    try:
-        supabase.table("dispenser_status").update(payload).eq("id", 1).execute()
-    except Exception as e:
-        print(f"⚠️  Supabase status error: {e}")
-
+# ====================== NEON DB HELPERS ======================
 def log_event(event_type, message, distance=None, chamber=None):
-    payload = {
-        "event_type": event_type,
-        "message": message,
-        "distance": distance,
-        "timestamp": datetime.utcnow().isoformat()
-    }
-    threading.Thread(target=_supabase_insert, args=(payload,), daemon=True).start()
+    ts = datetime.now(timezone.utc).isoformat()
+    threading.Thread(
+        target=db.insert_medicine_log,
+        args=(event_type, message, distance, ts),
+        daemon=True,
+    ).start()
     prefix = f"[Chamber {chamber}] " if chamber is not None else ""
     print(f"📝 {prefix}{message}")
 
 def update_status(status):
-    payload = {
-        "status": status,
-        "last_updated": datetime.utcnow().isoformat()
-    }
-    threading.Thread(target=_supabase_update, args=(payload,), daemon=True).start()
+    ts = datetime.now(timezone.utc).isoformat()
+    threading.Thread(
+        target=db.update_dispenser_status,
+        args=(status, ts),
+        daemon=True,
+    ).start()
     print(f"📊 Status: {status}")
 
 def push_fingerprint_event(fp_id):
-    def _push():
-        try:
-            supabase.table("dispenser_events").insert({
-                "fingerprint_id": fp_id
-            }).execute()
-        except Exception as e:
-            print(f"⚠️  Fingerprint event error: {e}")
-    threading.Thread(target=_push, daemon=True).start()
+    threading.Thread(
+        target=db.insert_dispenser_event,
+        args=(fp_id,),
+        daemon=True,
+    ).start()
 
 def get_patient_from_fingerprint(fp_id):
     global current_patient_id, current_patient_name, current_fingerprint_id
+    if not db.is_configured():
+        print(f"[OFFLINE] Cannot look up patient for fingerprint {fp_id}")
+        return
     try:
-        res = supabase.table("users") \
-            .select("id, name") \
-            .eq("fingerprint_id", fp_id) \
-            .eq("role", "PATIENT") \
-            .single() \
-            .execute()
-
-        data: dict = res.data  # type: ignore[assignment]
-        current_patient_id     = data["id"]
-        current_patient_name   = data["name"]
+        data = db.get_patient_by_fingerprint(fp_id)
+        if not data:
+            current_patient_id = current_patient_name = current_fingerprint_id = None
+            log_event("error", f"No patient matched fingerprint ID {fp_id}")
+            return
+        current_patient_id     = str(data["id"])
+        current_patient_name   = str(data["name"])
         current_fingerprint_id = fp_id
 
         log_event("patient_identified",
                   f"Patient identified: {current_patient_name}")
     except Exception:
+        current_patient_id = current_patient_name = current_fingerprint_id = None
         log_event("error", "Patient mapping failed")
 
 # ====================== TIME WINDOW DETECTION ======================
@@ -152,21 +127,18 @@ def get_chambers_to_open(patient_id, timing_col, timing_val):
     Returns a list of 0-based chamber indices whose timing_col == timing_val.
     Returns [] if none match or on error.
     """
+    if not db.is_configured() or patient_id is None:
+        return []
     try:
         print(f"🔍 Querying medication_plans: patient_id={patient_id}, col={timing_col}, val={timing_val}")
 
-        res = supabase.table("medication_plans") \
-            .select("chamber_id, morning_timing, afternoon_timing, evening_timing") \
-            .eq("patient_id", patient_id) \
-            .execute()
-
-        rows: list = res.data  # type: ignore[assignment]
+        rows = db.get_medication_plans(patient_id)
         print(f"🔍 Rows returned: {rows}")
 
         chambers = []
         for row in rows:
-            cell_value = row.get(timing_col, "")
-            print(f"🔍 Chamber {row.get('chamber_id')} -> {timing_col}=\'{cell_value}\' (need \'{timing_val}\')")
+            cell_value = row.get(timing_col, "") or ""
+            print(f"🔍 Chamber {row.get('chamber_id')} -> {timing_col}='{cell_value}' (need '{timing_val}')")
             if cell_value == timing_val:
                 cid = int(row["chamber_id"])
                 chambers.append(cid - 1)

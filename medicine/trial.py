@@ -1,23 +1,16 @@
 import io
-import os
 import sys
 import time
 import threading
 from datetime import datetime, timezone
 from typing import Optional
 
-try:
-    from dotenv import load_dotenv
-    load_dotenv()
-except ImportError:
-    pass
-
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, line_buffering=True)
 
 from pyfingerprint.pyfingerprint import PyFingerprint
 import RPi.GPIO as GPIO
 from hx711 import HX711
-from supabase import create_client, Client
+import db
 
 # ================================================================
 # HELPER — timezone-aware UTC timestamp (no deprecation warning)
@@ -26,20 +19,9 @@ def utcnow() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 # ================================================================
-# SUPABASE CONFIG
+# NEON POSTGRES CONFIG (reads DATABASE_URL from .env via stdlib)
 # ================================================================
-SUPABASE_URL = os.getenv("SUPABASE_URL", "")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY", "")
-
-supabase: Optional[Client] = None
-if SUPABASE_URL and SUPABASE_KEY:
-    try:
-        supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-        print("[SETUP] Supabase connected")
-    except Exception as _e:
-        print(f"[WARN] Supabase unavailable — running offline: {_e}")
-else:
-    print("[WARN] SUPABASE_URL / SUPABASE_KEY not set — running offline")
+db.check_connection()
 
 # ================================================================
 # GPIO PIN ASSIGNMENTS
@@ -135,25 +117,19 @@ current_patient_name:   Optional[str] = None
 current_fingerprint_id: Optional[int] = None
 
 # ================================================================
-# SUPABASE HELPERS
+# NEON DB HELPERS
 # ================================================================
 def _db_insert(table: str, payload: dict) -> None:
-    if supabase is None:
-        print(f"[OFFLINE] Skipping insert -> {table}")
-        return
-    try:
-        supabase.table(table).insert(payload).execute()
-    except Exception as exc:
-        print(f"[WARN] DB insert failed ({table}): {exc}")
-
-
-def _db_update_status(payload: dict) -> None:
-    if supabase is None:
-        return
-    try:
-        supabase.table("dispenser_status").update(payload).eq("id", 1).execute()
-    except Exception as exc:
-        print(f"[WARN] DB status update failed: {exc}")
+    if table == "weight_logs":
+        db.insert_weight_log(payload)
+    elif table == "consumption_logs":
+        db.insert_consumption_log(payload)
+    elif table == "medicine_logs":
+        db.insert_medicine_log(
+            payload.get("event_type", ""),
+            payload.get("message", ""),
+            payload.get("distance"),
+        )
 
 
 def log_event(
@@ -165,59 +141,48 @@ def log_event(
     """Print immediately, then insert into medicine_logs in background."""
     prefix = f"[Chamber {chamber}] " if chamber is not None else ""
     print(f"[LOG] {prefix}{message}")
-    payload = {
-        "event_type": event_type,
-        "message":    message,
-        "distance":   distance,
-    }
     threading.Thread(
-        target=_db_insert, args=("medicine_logs", payload), daemon=True
+        target=db.insert_medicine_log,
+        args=(event_type, message, distance),
+        daemon=True,
     ).start()
 
 
 def update_status(status: str) -> None:
     print(f"[STATUS] {status}")
     threading.Thread(
-        target=_db_update_status,
-        args=({"status": status, "last_updated": utcnow()},),
+        target=db.update_dispenser_status,
+        args=(status, utcnow()),
         daemon=True,
     ).start()
 
 
 def push_fingerprint_event(fp_id: int) -> None:
-    def _push() -> None:
-        if supabase is None:
-            return
-        try:
-            supabase.table("dispenser_events").insert(
-                {"fingerprint_id": fp_id}
-            ).execute()
-        except Exception as exc:
-            print(f"[WARN] Fingerprint event insert failed: {exc}")
-    threading.Thread(target=_push, daemon=True).start()
+    threading.Thread(
+        target=db.insert_dispenser_event,
+        args=(fp_id,),
+        daemon=True,
+    ).start()
 
 
 def get_patient_from_fingerprint(fp_id: int) -> None:
     global current_patient_id, current_patient_name, current_fingerprint_id
-    if supabase is None:
+    if not db.is_configured():
         print(f"[OFFLINE] Cannot look up patient for fingerprint {fp_id}")
         return
     try:
-        res = (
-            supabase.table("users")
-            .select("id, name")
-            .eq("fingerprint_id", fp_id)
-            .eq("role", "PATIENT")
-            .single()
-            .execute()
-        )
-        data: dict = dict(res.data)
+        data = db.get_patient_by_fingerprint(fp_id)
+        if not data:
+            current_patient_id = current_patient_name = current_fingerprint_id = None
+            log_event("error", f"No patient matched fingerprint ID {fp_id}")
+            return
         current_patient_id     = str(data["id"])
         current_patient_name   = str(data["name"])
         current_fingerprint_id = fp_id
         log_event("patient_identified",
                   f"Patient identified: {current_patient_name}")
     except Exception as exc:
+        current_patient_id = current_patient_name = current_fingerprint_id = None
         log_event("error", f"Patient lookup failed: {exc}")
 
 
@@ -326,23 +291,17 @@ def get_current_window() -> Optional[tuple]:
 def get_chambers_to_open(
     patient_id: Optional[str], timing_col: str, timing_val: str
 ) -> list:
-    if supabase is None or patient_id is None:
+    if not db.is_configured() or patient_id is None:
         print("[OFFLINE] Cannot query medication_plans")
         return []
     try:
         print(f"[DB] Querying chambers for patient={patient_id} "
               f"{timing_col}={timing_val}")
-        res = (
-            supabase.table("medication_plans")
-            .select("chamber_id, morning_timing, afternoon_timing, evening_timing")
-            .eq("patient_id", patient_id)
-            .execute()
-        )
-        rows: list = list(res.data) if res.data else []
+        rows = db.get_medication_plans(patient_id)
 
         chambers: list = []
         for row in rows:
-            cell = str(row.get(timing_col, ""))
+            cell = str(row.get(timing_col, "") or "")
             if cell == timing_val:
                 chambers.append(int(row["chamber_id"]) - 1)
 
